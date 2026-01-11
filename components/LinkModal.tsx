@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, Sparkles, Loader2, Pin, Wand2, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Sparkles, Loader2, Pin, Wand2, Trash2, Upload } from 'lucide-react';
 import { LinkItem, Category, AIConfig } from '../types';
 import { generateLinkDescription, suggestCategory } from '../services/geminiService';
 
@@ -26,6 +26,7 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
   const [autoFetchIcon, setAutoFetchIcon] = useState(true);
   const [batchMode, setBatchMode] = useState(false);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // 当模态框关闭时，重置批量模式为默认关闭状态
   useEffect(() => {
@@ -189,7 +190,7 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
 
   const handleFetchIcon = async () => {
     if (!url) return;
-    
+
     setIsFetchingIcon(true);
     try {
       // 提取域名
@@ -198,12 +199,12 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         domain = 'https://' + url;
       }
-      
+
       if (domain.startsWith('http://') || domain.startsWith('https://')) {
         const urlObj = new URL(domain);
         domain = urlObj.hostname;
       }
-      
+
       // 先尝试从KV缓存获取图标
       try {
         const response = await fetch(`/api/storage?getConfig=favicon&domain=${encodeURIComponent(domain)}`);
@@ -218,11 +219,11 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
       } catch (error) {
         console.log("Failed to fetch cached icon, will generate new one", error);
       }
-      
+
       // 如果缓存中没有，则生成新图标
       const iconUrl = `https://www.faviconextractor.com/favicon/${domain}?larger=true`;
       setIcon(iconUrl);
-      
+
       // 将图标保存到KV缓存
       try {
         const authToken = localStorage.getItem('authToken');
@@ -249,6 +250,61 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
     } finally {
       setIsFetchingIcon(false);
     }
+  };
+
+  // 处理本地图标上传
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // 验证文件类型
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml', 'image/x-icon', 'image/vnd.microsoft.icon'];
+    if (!validTypes.includes(file.type)) {
+      alert('请上传 PNG、JPG、SVG 或 ICO 格式的图标');
+      return;
+    }
+
+    // 验证文件大小 (限制为 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      alert('图标文件大小不能超过 2MB');
+      return;
+    }
+
+    setIsFetchingIcon(true);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64String = event.target?.result as string;
+      setIcon(base64String);
+      setIsFetchingIcon(false);
+
+      // 如果有URL，缓存到KV
+      if (url) {
+        let domain = url;
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+          domain = 'https://' + url;
+        }
+        try {
+          const urlObj = new URL(domain);
+          domain = urlObj.hostname;
+          cacheCustomIcon(domain, base64String);
+        } catch (error) {
+          console.log("Failed to parse URL for caching", error);
+        }
+      }
+    };
+
+    reader.onerror = () => {
+      alert('读取图标文件失败');
+      setIsFetchingIcon(false);
+    };
+
+    reader.readAsDataURL(file);
+  };
+
+  // 触发文件选择
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
   };
 
   if (!isOpen) return null;
@@ -335,52 +391,82 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1 dark:text-slate-300">图标 URL</label>
-            <div className="flex gap-2">
-              {icon && (
-                <div className="w-10 h-10 rounded-lg border border-slate-300 dark:border-slate-600 overflow-hidden flex-shrink-0 bg-white dark:bg-slate-700">
-                  <img
-                    src={icon}
-                    alt="图标预览"
-                    className="w-full h-full object-contain"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none';
-                    }}
-                  />
-                </div>
-              )}
-              <input
-                type="url"
-                value={icon}
-                onChange={(e) => setIcon(e.target.value)}
-                className="flex-1 p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                placeholder="https://example.com/icon.png"
-              />
-              <button
-                type="button"
-                onClick={handleFetchIcon}
-                disabled={!url || isFetchingIcon}
-                className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center gap-1 transition-colors"
-              >
-                {isFetchingIcon ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Wand2 className="w-4 h-4" />
+            <label className="block text-sm font-medium mb-1 dark:text-slate-300">图标</label>
+            <div className="space-y-2">
+              {/* 图标预览和输入框 */}
+              <div className="flex gap-2">
+                {icon && (
+                  <div className="w-10 h-10 rounded-lg border border-slate-300 dark:border-slate-600 overflow-hidden flex-shrink-0 bg-white dark:bg-slate-700">
+                    <img
+                      src={icon}
+                      alt="图标预览"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  </div>
                 )}
-                获取图标
-              </button>
-            </div>
-            <div className="flex items-center gap-2 mt-2">
-              <input
-                type="checkbox"
-                id="autoFetchIcon"
-                checked={autoFetchIcon}
-                onChange={(e) => setAutoFetchIcon(e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-slate-300 rounded dark:border-slate-600 dark:bg-slate-700"
-              />
-              <label htmlFor="autoFetchIcon" className="text-sm text-slate-700 dark:text-slate-300">
-                自动获取URL链接的图标
-              </label>
+                <input
+                  type="text"
+                  value={icon}
+                  onChange={(e) => setIcon(e.target.value)}
+                  className="flex-1 p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  placeholder="https://example.com/icon.png 或 Base64"
+                />
+              </div>
+
+              {/* 操作按钮 */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleFetchIcon}
+                  disabled={!url || isFetchingIcon}
+                  className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors"
+                  title="从URL自动获取图标"
+                >
+                  {isFetchingIcon ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Wand2 className="w-4 h-4" />
+                  )}
+                  <span>获取图标</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUploadClick}
+                  disabled={isFetchingIcon}
+                  className="flex-1 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors"
+                  title="上传本地图标文件"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>上传图标</span>
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.svg,.ico,image/png,image/jpeg,image/svg+xml,image/x-icon,image/vnd.microsoft.icon"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </div>
+
+              {/* 复选框和提示 */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="autoFetchIcon"
+                  checked={autoFetchIcon}
+                  onChange={(e) => setAutoFetchIcon(e.target.checked)}
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-slate-300 rounded dark:border-slate-600 dark:bg-slate-700"
+                />
+                <label htmlFor="autoFetchIcon" className="text-sm text-slate-700 dark:text-slate-300">
+                  自动获取URL链接的图标
+                </label>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                💡 支持上传 SVG、PNG、JPG、ICO 格式,文件大小限制 2MB
+              </p>
             </div>
           </div>
 

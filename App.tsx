@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, Plus, Upload, Moon, Sun, Menu, 
-  Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle,
+  Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle, Monitor,
   Pin, Settings, Lock, CloudCog, Github, GitFork, GripVertical, Save, CheckSquare, LogOut, ExternalLink
 } from 'lucide-react';
 import {
@@ -48,6 +48,8 @@ const WEBDAV_CONFIG_KEY = 'cloudnav_webdav_config';
 const AI_CONFIG_KEY = 'cloudnav_ai_config';
 const SEARCH_CONFIG_KEY = 'cloudnav_search_config';
 
+type ThemeMode = 'light' | 'dark' | 'system';
+
 function App() {
   // --- State ---
   const [links, setLinks] = useState<LinkItem[]>([]);
@@ -55,6 +57,7 @@ function App() {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [darkMode, setDarkMode] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   
   // Search Mode State
@@ -125,6 +128,12 @@ function App() {
   const [authToken, setAuthToken] = useState<string>('');
   const [requiresAuth, setRequiresAuth] = useState<boolean | null>(null); // null表示未检查，true表示需要认证，false表示不需要
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  const isLocalDev = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  }, []);
+  const shouldVerifyCategoryAction = !isLocalDev && requiresAuth !== false;
   
   // Sort State
   const [isSortingMode, setIsSortingMode] = useState<string | null>(null); // 存储正在排序的分类ID，null表示不在排序模式
@@ -274,7 +283,7 @@ function App() {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links: newLinks, categories: newCategories }));
 
       // 3. Sync to Cloud (if authenticated)
-      if (authToken) {
+      if (authToken && !isLocalDev) {
           syncToCloud(newLinks, newCategories, authToken);
       }
   };
@@ -374,7 +383,7 @@ function App() {
 
   // 加载链接图标缓存
   const loadLinkIcons = async (linksToLoad: LinkItem[]) => {
-    if (!authToken) return; // 只有在已登录状态下才加载图标缓存
+    if (!authToken || isLocalDev) return; // 只有在已登录且非本地开发状态下才加载图标缓存
     
     const updatedLinks = [...linksToLoad];
     const domainsToFetch: string[] = [];
@@ -455,14 +464,34 @@ function App() {
     }
   };
 
+  const applyThemeMode = (mode: ThemeMode) => {
+    if (typeof window === 'undefined') return;
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const shouldUseDark = mode === 'dark' || (mode === 'system' && prefersDark);
+    setDarkMode(shouldUseDark);
+    if (shouldUseDark) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  };
+
+  const setThemeAndApply = (mode: ThemeMode) => {
+    setThemeMode(mode);
+    localStorage.setItem('theme', mode);
+    applyThemeMode(mode);
+  };
+
   // --- Effects ---
 
   useEffect(() => {
     // Theme init
-    if (localStorage.getItem('theme') === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      setDarkMode(true);
-      document.documentElement.classList.add('dark');
-    }
+    const storedTheme = localStorage.getItem('theme');
+    const initialMode: ThemeMode = storedTheme === 'dark' || storedTheme === 'light' || storedTheme === 'system'
+      ? storedTheme
+      : 'system';
+    setThemeMode(initialMode);
+    applyThemeMode(initialMode);
 
     // Load Token and check expiry
     const savedToken = localStorage.getItem(AUTH_KEY);
@@ -517,13 +546,32 @@ function App() {
 
     // Initial Data Fetch
     const initData = async () => {
+        // 检测是否为本地开发环境
+        if (isLocalDev) {
+          // 本地开发模式:跳过服务器检查,直接加载本地数据
+          console.log('🔧 本地开发模式:跳过服务器检查');
+          setRequiresAuth(false); // 本地开发不需要强制认证
+          setIsCheckingAuth(false);
+
+          // 如果有本地token,自动"登录"
+          if (savedToken) {
+            setAuthToken(savedToken);
+            setSyncStatus('offline');
+          }
+
+          // 加载本地数据
+          loadFromLocal();
+          return;
+        }
+
+        // 生产环境:正常的服务器检查流程
         // 首先检查是否需要认证
         try {
             const authRes = await fetch('/api/storage?checkAuth=true');
             if (authRes.ok) {
                 const authData = await authRes.json();
                 setRequiresAuth(authData.requiresAuth);
-                
+
                 // 如果需要认证但用户未登录，则不获取数据
                 if (authData.requiresAuth && !savedToken) {
                     setIsCheckingAuth(false);
@@ -703,6 +751,30 @@ function App() {
     initData();
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => {
+      if (themeMode === 'system') {
+        applyThemeMode('system');
+      }
+    };
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange);
+    } else {
+      mediaQuery.addListener(handleChange);
+    }
+
+    return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener('change', handleChange);
+      } else {
+        mediaQuery.removeListener(handleChange);
+      }
+    };
+  }, [themeMode]);
+
   // Update page title and favicon when site settings change
   useEffect(() => {
     if (siteSettings.title) {
@@ -723,15 +795,12 @@ function App() {
   }, [siteSettings.title, siteSettings.favicon]);
 
   const toggleTheme = () => {
-    const newMode = !darkMode;
-    setDarkMode(newMode);
-    if (newMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
+    const nextMode: ThemeMode = themeMode === 'light'
+      ? 'dark'
+      : themeMode === 'dark'
+        ? 'system'
+        : 'light';
+    setThemeAndApply(nextMode);
   };
 
   // 视图模式切换处理函数
@@ -808,6 +877,23 @@ function App() {
 
   const handleLogin = async (password: string): Promise<boolean> => {
       try {
+        // 本地开发模式:跳过服务器验证,直接使用本地存储
+        if (isLocalDev) {
+          console.log('🔧 本地开发模式:跳过服务器认证');
+          setAuthToken(password);
+          localStorage.setItem(AUTH_KEY, password);
+          setIsAuthOpen(false);
+          setSyncStatus('offline'); // 设置为离线状态
+          localStorage.setItem('lastLoginTime', Date.now().toString());
+
+          // 加载本地数据
+          loadFromLocal();
+
+          alert('本地开发模式已启用\n数据仅保存在浏览器 LocalStorage');
+          return true;
+        }
+
+        // 生产环境:正常的服务器验证流程
         // 首先验证密码
         const authResponse = await fetch('/api/storage', {
             method: 'POST',
@@ -817,7 +903,7 @@ function App() {
             },
             body: JSON.stringify({ authOnly: true }) // 只用于验证密码，不更新数据
         });
-        
+
         if (authResponse.ok) {
             setAuthToken(password);
             localStorage.setItem(AUTH_KEY, password);
@@ -927,6 +1013,10 @@ function App() {
 
   // 分类操作密码验证处理函数
   const handleCategoryActionAuth = async (password: string): Promise<boolean> => {
+    if (isLocalDev) {
+      return true;
+    }
+
     try {
       // 验证密码
       const authResponse = await fetch('/api/storage', {
@@ -1954,7 +2044,7 @@ function App() {
         categories={categories}
         onUpdateCategories={handleUpdateCategories}
         onDeleteCategory={handleDeleteCategory}
-        onVerifyPassword={handleCategoryActionAuth}
+        onVerifyPassword={shouldVerifyCategoryAction ? handleCategoryActionAuth : undefined}
       />
 
       <BackupModal
@@ -2322,8 +2412,12 @@ function App() {
             </div>
 
             {/* 主题切换按钮 - 移动端：搜索框展开时隐藏，桌面端始终显示 */}
-            <button onClick={toggleTheme} className={`${isMobileSearchOpen ? 'hidden' : 'flex'} lg:flex p-2 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700`}>
-              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+            <button
+              onClick={toggleTheme}
+              title={themeMode === 'system' ? '主题: 跟随系统' : darkMode ? '主题: 暗色' : '主题: 亮色'}
+              className={`${isMobileSearchOpen ? 'hidden' : 'flex'} lg:flex p-2 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700`}
+            >
+              {themeMode === 'system' ? <Monitor size={18} /> : darkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
 
             {/* 登录/退出按钮 - 移动端：搜索框展开时隐藏，桌面端始终显示 */}

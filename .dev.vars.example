@@ -1,0 +1,9 @@
+# Cloudflare Pages 本地开发环境变量示例
+# 复制此文件为 .dev.vars 并填入你的配置
+
+# 访问密码 (用于数据同步和管理)
+PASSWORD=your_password_here
+
+# 注意:
+# - .dev.vars 文件不会被提交到 Git (已在 .gitignore 中)
+# - 生产环境请在 Cloudflare Pages 设置中配置环境变量
