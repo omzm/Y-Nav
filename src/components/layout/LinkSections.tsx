@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { DndContext, DragEndEvent, closestCorners, SensorDescriptor } from '@dnd-kit/core';
 import { SortableContext, rectSortingStrategy } from '@dnd-kit/sortable';
 import { Pin, Trash2, CheckSquare, Upload, Search, X, RefreshCw } from 'lucide-react';
@@ -110,6 +111,10 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
   const [hitokoto, setHitokoto] = React.useState<HitokotoPayload | null>(null);
   const [isHitokotoLoading, setIsHitokotoLoading] = React.useState(false);
   const hitokotoFetchingRef = React.useRef(false);
+  const moveMenuButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const moveMenuCloseTimeoutRef = React.useRef<number | null>(null);
+  const [moveMenuOpen, setMoveMenuOpen] = React.useState(false);
+  const [moveMenuPosition, setMoveMenuPosition] = React.useState({ top: 0, left: 0 });
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -203,6 +208,68 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
     }
   };
 
+  const updateMoveMenuPosition = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const trigger = moveMenuButtonRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = 176;
+    const padding = 8;
+    const left = Math.max(
+      padding,
+      Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - padding)
+    );
+    const top = rect.bottom + 8;
+    setMoveMenuPosition({ top, left });
+  }, []);
+
+  const openMoveMenu = React.useCallback(() => {
+    if (moveMenuCloseTimeoutRef.current) {
+      window.clearTimeout(moveMenuCloseTimeoutRef.current);
+      moveMenuCloseTimeoutRef.current = null;
+    }
+    updateMoveMenuPosition();
+    setMoveMenuOpen(true);
+  }, [updateMoveMenuPosition]);
+
+  const scheduleCloseMoveMenu = React.useCallback(() => {
+    if (moveMenuCloseTimeoutRef.current) {
+      window.clearTimeout(moveMenuCloseTimeoutRef.current);
+    }
+    moveMenuCloseTimeoutRef.current = window.setTimeout(() => {
+      setMoveMenuOpen(false);
+    }, 120);
+  }, []);
+
+  const cancelCloseMoveMenu = React.useCallback(() => {
+    if (moveMenuCloseTimeoutRef.current) {
+      window.clearTimeout(moveMenuCloseTimeoutRef.current);
+      moveMenuCloseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const handleBatchMoveSelect = React.useCallback((targetCategoryId: string) => {
+    onBatchMove(targetCategoryId);
+    setMoveMenuOpen(false);
+  }, [onBatchMove]);
+
+  React.useEffect(() => {
+    if (!moveMenuOpen) return;
+    const handleReposition = () => updateMoveMenuPosition();
+    window.addEventListener('resize', handleReposition);
+    window.addEventListener('scroll', handleReposition, true);
+    return () => {
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
+    };
+  }, [moveMenuOpen, updateMoveMenuPosition]);
+
+  React.useEffect(() => {
+    if (!isBatchEditMode) {
+      setMoveMenuOpen(false);
+    }
+  }, [isBatchEditMode]);
+
   return (
     <div className="flex-1 overflow-y-auto px-4 lg:px-8 pb-0 scrollbar-hide">
       {/* Content wrapper with max-width - Added min-h and flex to push footer to bottom */}
@@ -231,7 +298,7 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
         {showPinnedSection && (
           <section className="pt-6">
             {/* Section Header with Stats Badge */}
-            <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-200/50 dark:border-white/5">
+            <div className="relative z-30 flex items-center justify-between mb-6 pb-4 border-b border-slate-200/50 dark:border-white/5">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-accent/10">
                   <Pin size={16} className="text-accent" />
@@ -358,25 +425,19 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
                         <CheckSquare size={13} />
                         <span>{selectedLinksCount === displayedLinks.length ? '取消全选' : '全选'}</span>
                       </button>
-                      <div className="relative group">
+                      <div
+                        className="relative"
+                        onMouseEnter={openMoveMenu}
+                        onMouseLeave={scheduleCloseMoveMenu}
+                      >
                         <button
+                          ref={moveMenuButtonRef}
                           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-700/60 transition-colors"
                           title="批量移动"
                         >
                           <Upload size={13} />
                           <span>移动</span>
                         </button>
-                        <div className="absolute top-full right-0 mt-1 w-44 bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200/60 dark:border-slate-700/60 z-20 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 overflow-hidden">
-                          {categories.filter((cat) => cat.id !== selectedCategory).map((cat) => (
-                            <button
-                              key={cat.id}
-                              onClick={() => onBatchMove(cat.id)}
-                              className="w-full text-left px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                            >
-                              {cat.name}
-                            </button>
-                          ))}
-                        </div>
                       </div>
                       <button
                         onClick={onToggleBatchEditMode}
@@ -477,6 +538,25 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
           </div>
         </footer>
       </div>
+      {moveMenuOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed z-[70] w-44 bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200/60 dark:border-slate-700/60 overflow-hidden"
+          style={{ top: moveMenuPosition.top, left: moveMenuPosition.left }}
+          onMouseEnter={cancelCloseMoveMenu}
+          onMouseLeave={scheduleCloseMoveMenu}
+        >
+          {categories.filter((cat) => cat.id !== selectedCategory).map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => handleBatchMoveSelect(cat.id)}
+              className="w-full text-left px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            >
+              {cat.name}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
     </div>
   );
 };
