@@ -2,6 +2,7 @@ import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { LinkItem } from '../../types';
+import { getIconToneClass } from '../../utils/iconTone';
 
 interface SortableLinkCardProps {
     link: LinkItem;
@@ -26,6 +27,7 @@ const SortableLinkCard: React.FC<SortableLinkCardProps> = ({
     } = useSortable({ id: link.id });
 
     const isDetailedView = siteCardStyle === 'detailed';
+    const iconToneClass = getIconToneClass(link.icon, link.url, link.title);
 
     const style = {
         transform: CSS.Transform.toString(transform),
@@ -56,8 +58,10 @@ const SortableLinkCard: React.FC<SortableLinkCardProps> = ({
                 <div className={`flex items-center gap-3 mb-2 ${isDetailedView ? '' : 'w-full'
                     }`}>
                     {/* Icon */}
-                    <div className={`text-blue-600 dark:text-blue-400 flex items-center justify-center text-sm font-bold uppercase shrink-0 ${isDetailedView ? 'w-8 h-8 rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-700 dark:to-slate-800' : 'w-8 h-8 rounded-lg bg-slate-50 dark:bg-slate-700'
-                        }`}>
+                    <div
+                        className={`flex items-center justify-center text-sm font-bold uppercase shrink-0 border border-black/5 dark:border-white/5 ${iconToneClass} ${isDetailedView ? 'w-8 h-8 rounded-xl' : 'w-8 h-8 rounded-lg'
+                            }`}
+                    >
                         {link.icon ? <img src={link.icon} alt="" className="w-5 h-5" /> : link.title.charAt(0)}
                     </div>
 

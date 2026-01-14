@@ -1,6 +1,7 @@
 import React from 'react';
 import { LinkItem } from '../../types';
 import { Settings } from 'lucide-react';
+import { getIconToneClass } from '../../utils/iconTone';
 
 interface LinkCardProps {
     link: LinkItem;
@@ -37,17 +38,7 @@ const LinkCard: React.FC<LinkCardProps> = ({
         ${isDetailedView ? 'p-5' : 'p-3.5'}
     `;
 
-    const categoryColors: Record<string, string> = {
-        dev: 'bg-blue-100/50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400',
-        design: 'bg-purple-100/50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400',
-        read: 'bg-emerald-100/50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400',
-        ent: 'bg-rose-100/50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400',
-        ai: 'bg-indigo-100/50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400',
-        common: 'bg-amber-100/50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400',
-        default: 'bg-slate-100/50 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
-    };
-
-    const colorClass = categoryColors[link.categoryId] || categoryColors.default;
+    const colorClass = getIconToneClass(link.icon, link.url, link.title);
 
     const iconContainerClasses = `
         flex items-center justify-center shrink-0 rounded-xl overflow-hidden shadow-sm transition-transform duration-300 group-hover:scale-105
