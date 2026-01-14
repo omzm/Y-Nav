@@ -107,6 +107,9 @@ npm run dev
 | `cloudnav_webdav_config` | WebDAV 备份配置 |
 | `cloudnav_site_settings` | 网站配置（标题、主题色等） |
 | `cloudnav_favicon_cache` | 图标缓存（Base64 格式） |
+| `cloudnav_device_id` | 设备唯一标识（用于同步冲突检测） |
+| `cloudnav_sync_meta` | 同步元数据（版本号、最后同步时间） |
+| `cloudnav_last_sync` | 最后同步时间戳 |
 | `theme` | 主题模式（light/dark/system） |
 
 ### 清除本地数据
@@ -140,9 +143,45 @@ location.reload();
 
 ### Q: 如何测试完整的 KV 同步功能?
 
-**A**: 需要部署到 Cloudflare Pages,或使用 `wrangler dev` 启动本地 Workers 开发服务器。
+**A**: 有两种方式：
+
+#### 方式1: 使用 Wrangler 本地模拟 (推荐)
+
+```bash
+# 安装 wrangler
+npm install -g wrangler
+
+# 登录 Cloudflare 账号
+wrangler login
+
+# 本地启动 Pages 函数 (需要已有 KV 命名空间)
+wrangler pages dev dist --kv CLOUDNAV_KV
+```
+
+#### 方式2: 部署到 Cloudflare Pages
+
+部署后访问线上地址即可测试完整的 KV 同步功能。
 
 ---
+
+### Q: 本地开发时同步状态显示"同步失败"正常吗?
+
+**A**: 是的，这完全正常！本地开发时 `/api/sync` 端点不可用（需要 Cloudflare Pages Functions 环境）。
+
+- 右下角的同步状态指示器会显示红色的"同步失败"
+- 这不影响本地开发和测试其他功能
+- 部署到 Cloudflare Pages 后会正常工作
+
+---
+
+### Q: KV 同步的工作流程是什么?
+
+**A**:
+
+1. **页面加载时**: 自动从云端拉取数据，与本地版本对比
+2. **检测到云端更新**: 弹出冲突解决对话框，用户选择保留哪个版本
+3. **本地数据变更时**: 3秒 debounce 后自动推送到云端
+4. **冲突检测**: 使用版本号 (version) 进行乐观锁校验
 
 ### Q: 上传的图标存储在哪里?
 

@@ -1,7 +1,6 @@
-import React, { useMemo, useEffect, lazy, Suspense } from 'react';
-import { LinkItem, Category } from './types';
+import React, { useMemo, useEffect, lazy, Suspense, useState, useCallback, useRef } from 'react';
+import { LinkItem, Category, SyncConflict, CloudNavSyncData } from './types';
 
-// Lazy load modal components for better code splitting
 // Lazy load modal components for better code splitting
 const LinkModal = lazy(() => import('./components/modals/LinkModal'));
 const CategoryManagerModal = lazy(() => import('./components/modals/CategoryManagerModal'));
@@ -9,12 +8,14 @@ const BackupModal = lazy(() => import('./components/modals/BackupModal'));
 const ImportModal = lazy(() => import('./components/modals/ImportModal'));
 const SettingsModal = lazy(() => import('./components/modals/SettingsModal'));
 const SearchConfigModal = lazy(() => import('./components/modals/SearchConfigModal'));
+const SyncConflictModal = lazy(() => import('./components/modals/SyncConflictModal'));
 
 // Eagerly load frequently used components
 import ContextMenu from './components/layout/ContextMenu';
 import Sidebar from './components/layout/Sidebar';
 import MainHeader from './components/layout/MainHeader';
 import LinkSections from './components/layout/LinkSections';
+import SyncStatusIndicator from './components/ui/SyncStatusIndicator';
 
 import {
   useDataStore,
@@ -25,7 +26,9 @@ import {
   useBatchEdit,
   useSorting,
   useConfig,
-  useSidebar
+  useSidebar,
+  useSyncEngine,
+  buildSyncData
 } from './hooks';
 
 import { GITHUB_REPO_URL } from './utils/constants';
@@ -43,8 +46,14 @@ function App() {
     reorderLinks,
     reorderPinnedLinks,
     deleteCategory: deleteCategoryStore,
-    importData
+    importData,
+    isLoaded
   } = useDataStore();
+
+  // === Sync Engine ===
+  const [syncConflictOpen, setSyncConflictOpen] = useState(false);
+  const [currentConflict, setCurrentConflict] = useState<SyncConflict | null>(null);
+  const hasInitialSyncRun = useRef(false);
 
   // === Theme ===
   const { themeMode, darkMode, toggleTheme } = useTheme();
@@ -75,6 +84,42 @@ function App() {
     navTitleText,
     navTitleShort
   } = useConfig();
+
+  // === Sync Engine Hook ===
+  const handleSyncConflict = useCallback((conflict: SyncConflict) => {
+    setCurrentConflict(conflict);
+    setSyncConflictOpen(true);
+  }, []);
+
+  const handleSyncComplete = useCallback((data: CloudNavSyncData) => {
+    // 当从云端恢复数据时更新本地数据
+    if (data.links && data.categories) {
+      updateData(data.links, data.categories);
+    }
+    if (data.searchConfig) {
+      restoreSearchConfig(data.searchConfig);
+    }
+    if (data.aiConfig) {
+      restoreAIConfig(data.aiConfig);
+    }
+  }, [updateData, restoreAIConfig]);
+
+  const handleSyncError = useCallback((error: string) => {
+    console.error('[Sync Error]', error);
+  }, []);
+
+  const {
+    syncStatus,
+    lastSyncTime,
+    pullFromCloud,
+    pushToCloud,
+    schedulePush,
+    resolveConflict: resolveSyncConflict
+  } = useSyncEngine({
+    onConflict: handleSyncConflict,
+    onSyncComplete: handleSyncComplete,
+    onError: handleSyncError
+  });
 
   // === Search ===
   const {
@@ -320,6 +365,92 @@ function App() {
     return { bg: 'bg-slate-50 dark:bg-slate-950', text: 'text-slate-900 dark:text-slate-50' };
   }, [siteSettings.grayScale]);
 
+  // === KV Sync: Initial Load ===
+  useEffect(() => {
+    // 只在本地数据加载完成后执行一次
+    if (!isLoaded || hasInitialSyncRun.current) return;
+    hasInitialSyncRun.current = true;
+
+    const checkCloudData = async () => {
+      const cloudData = await pullFromCloud();
+
+      if (cloudData && cloudData.links && cloudData.categories) {
+        // 比较版本，如果云端数据较新，弹出冲突对话框
+        const localMeta = localStorage.getItem('cloudnav_sync_meta');
+        const localVersion = localMeta ? JSON.parse(localMeta).version : 0;
+
+        if (cloudData.meta.version > localVersion) {
+          // 云端有更新的数据
+          const localData = buildSyncData(links, categories, { mode: searchMode, externalSources: externalSearchSources }, aiConfig, siteSettings);
+          handleSyncConflict({
+            localData: { ...localData, meta: { updatedAt: Date.now(), deviceId: '', version: localVersion } },
+            remoteData: cloudData
+          });
+        }
+      }
+    };
+
+    checkCloudData();
+  }, [isLoaded, pullFromCloud, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, buildSyncData, handleSyncConflict]);
+
+  // === KV Sync: Auto-sync on data change ===
+  const prevLinksRef = useRef<LinkItem[]>([]);
+  const prevCategoriesRef = useRef<Category[]>([]);
+
+  useEffect(() => {
+    // 跳过初始加载阶段
+    if (!isLoaded || !hasInitialSyncRun.current) return;
+
+    // 检测数据是否发生变化
+    const linksChanged = JSON.stringify(links) !== JSON.stringify(prevLinksRef.current);
+    const categoriesChanged = JSON.stringify(categories) !== JSON.stringify(prevCategoriesRef.current);
+
+    if (linksChanged || categoriesChanged) {
+      prevLinksRef.current = [...links];
+      prevCategoriesRef.current = [...categories];
+
+      // 触发 debounce 同步
+      const syncData = buildSyncData(
+        links,
+        categories,
+        { mode: searchMode, externalSources: externalSearchSources },
+        aiConfig,
+        siteSettings
+      );
+      schedulePush(syncData);
+    }
+  }, [links, categories, isLoaded, searchMode, externalSearchSources, aiConfig, siteSettings, schedulePush]);
+
+  // === Sync Conflict Resolution ===
+  const handleResolveConflict = useCallback((choice: 'local' | 'remote') => {
+    if (choice === 'remote' && currentConflict) {
+      // 使用云端数据
+      handleSyncComplete(currentConflict.remoteData);
+    }
+    resolveSyncConflict(choice);
+    setSyncConflictOpen(false);
+    setCurrentConflict(null);
+  }, [currentConflict, handleSyncComplete, resolveSyncConflict]);
+
+  // 手动触发同步
+  const handleManualSync = useCallback(async () => {
+    const syncData = buildSyncData(
+      links,
+      categories,
+      { mode: searchMode, externalSources: externalSearchSources },
+      aiConfig,
+      siteSettings
+    );
+    await pushToCloud(syncData);
+  }, [links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, pushToCloud]);
+
+  const handleManualPull = useCallback(async () => {
+    const cloudData = await pullFromCloud();
+    if (cloudData) {
+      handleSyncComplete(cloudData);
+    }
+  }, [pullFromCloud, handleSyncComplete]);
+
   // === Render ===
   return (
     <div className={`flex h-screen overflow-hidden ${toneClasses.text}`}>
@@ -375,7 +506,25 @@ function App() {
           sources={externalSearchSources}
           onSave={(sources) => saveSearchConfig(sources, searchMode)}
         />
+
+        {/* Sync Conflict Modal */}
+        <SyncConflictModal
+          isOpen={syncConflictOpen}
+          conflict={currentConflict}
+          onResolve={handleResolveConflict}
+          onClose={() => setSyncConflictOpen(false)}
+        />
       </Suspense>
+
+      {/* Sync Status Indicator - Fixed bottom right */}
+      <div className="fixed bottom-4 right-4 z-30">
+        <SyncStatusIndicator
+          status={syncStatus}
+          lastSyncTime={lastSyncTime}
+          onManualSync={handleManualSync}
+          onManualPull={handleManualPull}
+        />
+      </div>
 
       {/* Sidebar Mobile Overlay */}
       {sidebarOpen && (

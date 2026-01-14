@@ -101,3 +101,39 @@ export const INITIAL_LINKS: LinkItem[] = [
   { id: '14', title: 'The Verge', url: 'https://www.theverge.com', categoryId: 'read', createdAt: Date.now(), description: '科技新闻与评测', icon: 'https://www.faviconextractor.com/favicon/theverge.com?larger=true' },
   { id: '15', title: 'Netflix', url: 'https://www.netflix.com', categoryId: 'ent', createdAt: Date.now(), description: '流媒体影视平台', icon: 'https://www.faviconextractor.com/favicon/netflix.com?larger=true' },
 ];
+
+// ============ 同步系统类型定义 ============
+
+// 同步元数据
+export interface SyncMetadata {
+  updatedAt: number;      // 最后更新时间戳 (毫秒)
+  deviceId: string;       // 设备唯一标识
+  version: number;        // 数据版本号（递增，防止并发冲突）
+}
+
+// KV 存储的完整数据结构
+export interface CloudNavSyncData {
+  links: LinkItem[];
+  categories: Category[];
+  searchConfig?: SearchConfig;
+  aiConfig?: AIConfig;
+  siteSettings?: SiteSettings;
+  meta: SyncMetadata;
+}
+
+// 同步冲突信息
+export interface SyncConflict {
+  localData: CloudNavSyncData;
+  remoteData: CloudNavSyncData;
+}
+
+// 同步状态枚举
+export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'pending' | 'error' | 'conflict';
+
+// 同步 API 响应
+export interface SyncApiResponse {
+  success: boolean;
+  data?: CloudNavSyncData;
+  error?: string;
+  conflict?: boolean;
+}
