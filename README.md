@@ -123,8 +123,7 @@ Y-Nav/
 ├── worker/                 # Cloudflare Workers 入口
 │   └── index.ts
 ├── .github/workflows/      # CI/CD 自动部署
-│   ├── deploy-workers.yml
-│   └── deploy-pages.yml
+│   └── deploy-workers.yml  # Workers 自动部署 (push main 触发)
 ├── wrangler.toml           # Workers 部署配置
 └── package.json
 ```
