@@ -15,6 +15,7 @@ interface SettingsModalProps {
   links: LinkItem[];
   onUpdateLinks: (links: LinkItem[]) => void;
   onOpenImport: () => void;
+  onCreateBackup: () => Promise<boolean>;
   closeOnBackdrop?: boolean;
 }
 
@@ -27,6 +28,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   links,
   onUpdateLinks,
   onOpenImport,
+  onCreateBackup,
   closeOnBackdrop = true
 }) => {
   const [activeTab, setActiveTab] = useState<'site' | 'ai' | 'appearance' | 'data'>('site');
@@ -167,6 +169,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             <DataTab
               onOpenImport={onOpenImport}
               onClose={onClose}
+              onCreateBackup={onCreateBackup}
             />
           )}
         </div>

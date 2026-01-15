@@ -235,10 +235,23 @@ async function handleListBackups(request: Request, env: Env): Promise<Response> 
     try {
         const list = await env.YNAV_KV.list({ prefix: KV_BACKUP_PREFIX });
 
-        const backups = list.keys.map((key: { name: string; expiration?: number }) => ({
-            key: key.name,
-            timestamp: key.name.replace(KV_BACKUP_PREFIX, ''),
-            expiration: key.expiration
+        const backups = await Promise.all(list.keys.map(async (key: { name: string; expiration?: number }) => {
+            let meta: SyncMetadata | null = null;
+            try {
+                const data = await env.YNAV_KV.get(key.name, 'json') as YNavSyncData | null;
+                meta = data?.meta || null;
+            } catch {
+                meta = null;
+            }
+
+            return {
+                key: key.name,
+                timestamp: key.name.replace(KV_BACKUP_PREFIX, ''),
+                expiration: key.expiration,
+                deviceId: meta?.deviceId,
+                updatedAt: meta?.updatedAt,
+                version: meta?.version
+            };
         }));
 
         return new Response(JSON.stringify({

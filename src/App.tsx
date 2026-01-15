@@ -31,7 +31,7 @@ import {
   buildSyncData
 } from './hooks';
 
-import { GITHUB_REPO_URL } from './utils/constants';
+import { GITHUB_REPO_URL, SYNC_META_KEY, getDeviceId } from './utils/constants';
 
 function App() {
   // === Core Data ===
@@ -55,6 +55,15 @@ function App() {
   const [syncConflictOpen, setSyncConflictOpen] = useState(false);
   const [currentConflict, setCurrentConflict] = useState<SyncConflict | null>(null);
   const hasInitialSyncRun = useRef(false);
+  const getLocalSyncMeta = useCallback(() => {
+    const stored = localStorage.getItem(SYNC_META_KEY);
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
+  }, []);
 
   // === Theme ===
   const { themeMode, darkMode, setThemeAndApply } = useTheme();
@@ -78,6 +87,7 @@ function App() {
     aiConfig,
     saveAIConfig,
     restoreAIConfig,
+    restoreSiteSettings,
     siteSettings,
     handleViewModeChange,
     navTitleText,
@@ -101,7 +111,10 @@ function App() {
     if (data.aiConfig) {
       restoreAIConfig(data.aiConfig);
     }
-  }, [updateData, restoreAIConfig]);
+    if (data.siteSettings) {
+      restoreSiteSettings(data.siteSettings);
+    }
+  }, [updateData, restoreAIConfig, restoreSiteSettings]);
 
   const handleSyncError = useCallback((error: string) => {
     console.error('[Sync Error]', error);
@@ -113,6 +126,7 @@ function App() {
     pullFromCloud,
     pushToCloud,
     schedulePush,
+    createBackup,
     resolveConflict: resolveSyncConflict
   } = useSyncEngine({
     onConflict: handleSyncConflict,
@@ -381,18 +395,24 @@ function App() {
     hasInitialSyncRun.current = true;
 
     const checkCloudData = async () => {
+      const localMeta = getLocalSyncMeta();
+      const localVersion = localMeta?.version ?? 0;
+      const localUpdatedAt = typeof localMeta?.updatedAt === 'number' ? localMeta.updatedAt : 0;
+      const localDeviceId = localMeta?.deviceId || getDeviceId();
       const cloudData = await pullFromCloud();
 
       if (cloudData && cloudData.links && cloudData.categories) {
-        // 比较版本，如果云端数据较新，弹出冲突对话框
-        const localMeta = localStorage.getItem('ynav_sync_meta');
-        const localVersion = localMeta ? JSON.parse(localMeta).version : 0;
-
-        if (cloudData.meta.version > localVersion) {
-          // 云端有更新的数据
-          const localData = buildSyncData(links, categories, { mode: searchMode, externalSources: externalSearchSources }, aiConfig, siteSettings);
+        // 版本不一致时提示用户选择
+        if (cloudData.meta.version !== localVersion) {
+          const localData = buildSyncData(
+            links,
+            categories,
+            { mode: searchMode, externalSources: externalSearchSources },
+            aiConfig,
+            siteSettings
+          );
           handleSyncConflict({
-            localData: { ...localData, meta: { updatedAt: Date.now(), deviceId: '', version: localVersion } },
+            localData: { ...localData, meta: { updatedAt: localUpdatedAt, deviceId: localDeviceId, version: localVersion } },
             remoteData: cloudData
           });
         }
@@ -400,35 +420,29 @@ function App() {
     };
 
     checkCloudData();
-  }, [isLoaded, pullFromCloud, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, buildSyncData, handleSyncConflict]);
+  }, [isLoaded, pullFromCloud, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, buildSyncData, handleSyncConflict, getLocalSyncMeta]);
 
   // === KV Sync: Auto-sync on data change ===
-  const prevLinksRef = useRef<LinkItem[]>([]);
-  const prevCategoriesRef = useRef<Category[]>([]);
+  const prevSyncDataRef = useRef<string | null>(null);
 
   useEffect(() => {
     // 跳过初始加载阶段
-    if (!isLoaded || !hasInitialSyncRun.current) return;
+    if (!isLoaded || !hasInitialSyncRun.current || currentConflict) return;
 
-    // 检测数据是否发生变化
-    const linksChanged = JSON.stringify(links) !== JSON.stringify(prevLinksRef.current);
-    const categoriesChanged = JSON.stringify(categories) !== JSON.stringify(prevCategoriesRef.current);
+    const syncData = buildSyncData(
+      links,
+      categories,
+      { mode: searchMode, externalSources: externalSearchSources },
+      aiConfig,
+      siteSettings
+    );
+    const serialized = JSON.stringify(syncData);
 
-    if (linksChanged || categoriesChanged) {
-      prevLinksRef.current = [...links];
-      prevCategoriesRef.current = [...categories];
-
-      // 触发 debounce 同步
-      const syncData = buildSyncData(
-        links,
-        categories,
-        { mode: searchMode, externalSources: externalSearchSources },
-        aiConfig,
-        siteSettings
-      );
+    if (serialized !== prevSyncDataRef.current) {
+      prevSyncDataRef.current = serialized;
       schedulePush(syncData);
     }
-  }, [links, categories, isLoaded, searchMode, externalSearchSources, aiConfig, siteSettings, schedulePush]);
+  }, [links, categories, isLoaded, searchMode, externalSearchSources, aiConfig, siteSettings, schedulePush, buildSyncData, currentConflict]);
 
   // === Sync Conflict Resolution ===
   const handleResolveConflict = useCallback((choice: 'local' | 'remote') => {
@@ -453,12 +467,47 @@ function App() {
     await pushToCloud(syncData);
   }, [links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, pushToCloud]);
 
+  const handleCreateBackup = useCallback(async () => {
+    const syncData = buildSyncData(
+      links,
+      categories,
+      { mode: searchMode, externalSources: externalSearchSources },
+      aiConfig,
+      siteSettings
+    );
+    const success = await createBackup(syncData);
+    if (success) {
+      notify('备份已创建', 'success');
+    } else {
+      notify('备份失败，请稍后重试', 'error');
+    }
+    return success;
+  }, [links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, createBackup, notify]);
+
   const handleManualPull = useCallback(async () => {
+    const localMeta = getLocalSyncMeta();
+    const localVersion = localMeta?.version ?? 0;
+    const localUpdatedAt = typeof localMeta?.updatedAt === 'number' ? localMeta.updatedAt : 0;
+    const localDeviceId = localMeta?.deviceId || getDeviceId();
     const cloudData = await pullFromCloud();
-    if (cloudData) {
+    if (cloudData && cloudData.links && cloudData.categories) {
+      if (cloudData.meta.version !== localVersion) {
+        const localData = buildSyncData(
+          links,
+          categories,
+          { mode: searchMode, externalSources: externalSearchSources },
+          aiConfig,
+          siteSettings
+        );
+        handleSyncConflict({
+          localData: { ...localData, meta: { updatedAt: localUpdatedAt, deviceId: localDeviceId, version: localVersion } },
+          remoteData: cloudData
+        });
+        return;
+      }
       handleSyncComplete(cloudData);
     }
-  }, [pullFromCloud, handleSyncComplete]);
+  }, [pullFromCloud, handleSyncComplete, getLocalSyncMeta, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, buildSyncData, handleSyncConflict]);
 
   // === Render ===
   return (
@@ -494,6 +543,7 @@ function App() {
           links={links}
           onUpdateLinks={(newLinks) => updateData(newLinks, categories)}
           onOpenImport={() => setIsImportModalOpen(true)}
+          onCreateBackup={handleCreateBackup}
           closeOnBackdrop={closeOnBackdrop}
         />
 

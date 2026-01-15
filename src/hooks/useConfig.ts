@@ -62,6 +62,12 @@ export function useConfig() {
         localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(config));
     }, []);
 
+    // Restore site settings (from sync)
+    const restoreSiteSettings = useCallback((settings: SiteSettings) => {
+        setSiteSettings(settings);
+        localStorage.setItem(SITE_SETTINGS_KEY, JSON.stringify(settings));
+    }, []);
+
     // Update site settings (e.g., card style)
     const updateSiteSettings = useCallback((updates: Partial<SiteSettings>) => {
         setSiteSettings(prev => {
@@ -106,6 +112,7 @@ export function useConfig() {
         // Site Settings
         siteSettings,
         updateSiteSettings,
+        restoreSiteSettings,
         handleViewModeChange,
 
         // Derived

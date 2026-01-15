@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import { X, CloudOff, Smartphone, AlertTriangle, Clock, Link2, FolderOpen } from 'lucide-react';
+import { X, CloudOff, Smartphone, AlertTriangle, Clock, Link2, FolderOpen, Cpu } from 'lucide-react';
 import { SyncConflict } from '../../types';
 
 interface SyncConflictModalProps {
@@ -25,11 +25,12 @@ const SyncConflictModal: React.FC<SyncConflictModalProps> = ({
 }) => {
     if (!isOpen || !conflict) return null;
 
-    const localTime = new Date(conflict.localData.meta.updatedAt);
-    const remoteTime = new Date(conflict.remoteData.meta.updatedAt);
+    const localTime = conflict.localData.meta.updatedAt;
+    const remoteTime = conflict.remoteData.meta.updatedAt;
 
-    const formatTime = (date: Date) => {
-        return date.toLocaleString('zh-CN', {
+    const formatTime = (timestamp?: number) => {
+        if (!timestamp) return '未知时间';
+        return new Date(timestamp).toLocaleString('zh-CN', {
             month: 'short',
             day: 'numeric',
             hour: '2-digit',
@@ -37,7 +38,30 @@ const SyncConflictModal: React.FC<SyncConflictModalProps> = ({
         });
     };
 
-    const isLocalNewer = conflict.localData.meta.updatedAt > conflict.remoteData.meta.updatedAt;
+    const formatDeviceLabel = (deviceId?: string) => {
+        if (!deviceId) return '未知设备';
+        const parts = deviceId.split('_');
+        if (parts.length >= 3 && parts[0] === 'device') {
+            const timestamp = Number(parts[1]);
+            if (!Number.isNaN(timestamp)) {
+                return `设备 ${new Date(timestamp).toLocaleString('zh-CN', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                })}`;
+            }
+        }
+        return deviceId;
+    };
+
+    const localDeviceId = conflict.localData.meta.deviceId;
+    const remoteDeviceId = conflict.remoteData.meta.deviceId;
+    const localDeviceLabel = formatDeviceLabel(localDeviceId);
+    const remoteDeviceLabel = formatDeviceLabel(remoteDeviceId);
+    const showLocalDeviceId = localDeviceId && localDeviceLabel !== localDeviceId;
+    const showRemoteDeviceId = remoteDeviceId && remoteDeviceLabel !== remoteDeviceId;
+    const isLocalNewer = (localTime || 0) > (remoteTime || 0);
 
     return (
         <div
@@ -95,6 +119,15 @@ const SyncConflictModal: React.FC<SyncConflictModalProps> = ({
                                 <span>{formatTime(localTime)}</span>
                             </div>
                             <div className="flex items-center gap-2">
+                                <Cpu className="w-4 h-4" />
+                                <span className="break-all text-xs">{localDeviceLabel}</span>
+                            </div>
+                            {showLocalDeviceId && (
+                                <div className="pl-6 text-[10px] text-slate-500 dark:text-slate-400 break-all">
+                                    {localDeviceId}
+                                </div>
+                            )}
+                            <div className="flex items-center gap-2">
                                 <Link2 className="w-4 h-4" />
                                 <span>{conflict.localData.links.length} 个链接</span>
                             </div>
@@ -138,6 +171,15 @@ const SyncConflictModal: React.FC<SyncConflictModalProps> = ({
                                 <Clock className="w-4 h-4" />
                                 <span>{formatTime(remoteTime)}</span>
                             </div>
+                            <div className="flex items-center gap-2">
+                                <Cpu className="w-4 h-4" />
+                                <span className="break-all text-xs">{remoteDeviceLabel}</span>
+                            </div>
+                            {showRemoteDeviceId && (
+                                <div className="pl-6 text-[10px] text-slate-500 dark:text-slate-400 break-all">
+                                    {remoteDeviceId}
+                                </div>
+                            )}
                             <div className="flex items-center gap-2">
                                 <Link2 className="w-4 h-4" />
                                 <span>{conflict.remoteData.links.length} 个链接</span>
