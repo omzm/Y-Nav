@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Database, Upload, Cloud, Lock, Eye, EyeOff, RefreshCw, Clock, Cpu, CloudUpload } from 'lucide-react';
+import { Database, Upload, Cloud, Lock, Eye, EyeOff, RefreshCw, Clock, Cpu, CloudUpload, CloudDownload } from 'lucide-react';
 import { SYNC_API_ENDPOINT, SYNC_PASSWORD_KEY } from '../../../utils/constants';
 
 interface DataTabProps {
     onOpenImport: () => void;
     onClose: () => void;
     onCreateBackup: () => Promise<boolean>;
+    onRestoreBackup: (backupKey: string) => Promise<boolean>;
 }
 
 interface BackupItem {
@@ -17,7 +18,7 @@ interface BackupItem {
     version?: number;
 }
 
-const DataTab: React.FC<DataTabProps> = ({ onOpenImport, onClose, onCreateBackup }) => {
+const DataTab: React.FC<DataTabProps> = ({ onOpenImport, onClose, onCreateBackup, onRestoreBackup }) => {
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [backups, setBackups] = useState<BackupItem[]>([]);
@@ -25,6 +26,7 @@ const DataTab: React.FC<DataTabProps> = ({ onOpenImport, onClose, onCreateBackup
     const [backupError, setBackupError] = useState<string | null>(null);
     const [isCreatingBackup, setIsCreatingBackup] = useState(false);
     const [createError, setCreateError] = useState<string | null>(null);
+    const [restoringKey, setRestoringKey] = useState<string | null>(null);
 
     useEffect(() => {
         setPassword(localStorage.getItem(SYNC_PASSWORD_KEY) || '');
@@ -111,6 +113,18 @@ const DataTab: React.FC<DataTabProps> = ({ onOpenImport, onClose, onCreateBackup
             setIsCreatingBackup(false);
         }
     }, [fetchBackups, onCreateBackup]);
+
+    const handleRestoreBackup = useCallback(async (backupKey: string) => {
+        setRestoringKey(backupKey);
+        try {
+            const success = await onRestoreBackup(backupKey);
+            if (success) {
+                await fetchBackups();
+            }
+        } finally {
+            setRestoringKey(null);
+        }
+    }, [fetchBackups, onRestoreBackup]);
 
     useEffect(() => {
         fetchBackups();
@@ -216,9 +230,20 @@ const DataTab: React.FC<DataTabProps> = ({ onOpenImport, onClose, onCreateBackup
                                     key={backup.key}
                                     className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 px-3 py-2"
                                 >
-                                    <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-                                        <Clock size={12} />
-                                        <span>{formatBackupTime(backup)}</span>
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                            <Clock size={12} />
+                                            <span>{formatBackupTime(backup)}</span>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleRestoreBackup(backup.key)}
+                                            disabled={!!restoringKey}
+                                            className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-200 disabled:opacity-60"
+                                        >
+                                            <CloudDownload size={12} className={restoringKey === backup.key ? 'animate-spin' : ''} />
+                                            恢复
+                                        </button>
                                     </div>
                                     <div className="mt-1 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                                         <Cpu size={12} />

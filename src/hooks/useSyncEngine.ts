@@ -46,6 +46,7 @@ interface UseSyncEngineReturn {
     pushToCloud: (data: Omit<YNavSyncData, 'meta'>, force?: boolean) => Promise<boolean>;
     schedulePush: (data: Omit<YNavSyncData, 'meta'>) => void;
     createBackup: (data: Omit<YNavSyncData, 'meta'>) => Promise<boolean>;
+    restoreBackup: (backupKey: string) => Promise<YNavSyncData | null>;
 
     // 冲突解决
     resolveConflict: (choice: 'local' | 'remote') => void;
@@ -262,6 +263,36 @@ export function useSyncEngine(options: UseSyncEngineOptions = {}): UseSyncEngine
         }
     }, [onError]);
 
+    // 从备份恢复（服务端会创建回滚点）
+    const restoreBackup = useCallback(async (backupKey: string): Promise<YNavSyncData | null> => {
+        setSyncStatus('syncing');
+
+        try {
+            const response = await fetch(`${SYNC_API_ENDPOINT}?action=restore`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ backupKey, deviceId: getDeviceId() })
+            });
+            const result = await response.json();
+
+            if (!result.success || !result.data) {
+                setSyncStatus('error');
+                onError?.(result.error || '恢复失败');
+                return null;
+            }
+
+            saveLocalSyncMeta(result.data.meta);
+            setLastSyncTime(result.data.meta.updatedAt);
+            setSyncStatus('synced');
+
+            return result.data;
+        } catch (error: any) {
+            setSyncStatus('error');
+            onError?.(error.message || '网络错误');
+            return null;
+        }
+    }, [onError]);
+
     // 解决冲突
     const resolveConflict = useCallback((choice: 'local' | 'remote') => {
         if (!currentConflict) return;
@@ -296,6 +327,7 @@ export function useSyncEngine(options: UseSyncEngineOptions = {}): UseSyncEngine
         pushToCloud,
         schedulePush,
         createBackup,
+        restoreBackup,
         resolveConflict,
         currentConflict,
         cancelPendingSync

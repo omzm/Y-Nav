@@ -5,6 +5,7 @@
  *   GET  /api/sync         - 读取云端数据
  *   POST /api/sync         - 写入云端数据 (带版本校验)
  *   POST /api/sync/backup  - 创建带时间戳的快照备份
+ *   POST /api/sync/restore - 从备份恢复并创建回滚点
  *   GET  /api/sync/backups - 获取备份列表
  */
 
@@ -38,6 +39,7 @@ interface YNavSyncData {
 // KV Key 常量
 const KV_MAIN_DATA_KEY = 'ynav:data';
 const KV_BACKUP_PREFIX = 'ynav:backup:';
+const BACKUP_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 // 辅助函数：验证密码
 const isAuthenticated = (request: Request, env: Env): boolean => {
@@ -201,7 +203,7 @@ async function handleBackup(request: Request, env: Env): Promise<Response> {
         // 写入备份
         await env.YNAV_KV.put(backupKey, JSON.stringify(body.data), {
             // 备份保留 30 天
-            expirationTtl: 30 * 24 * 60 * 60
+            expirationTtl: BACKUP_TTL_SECONDS
         });
 
         return new Response(JSON.stringify({
@@ -215,6 +217,92 @@ async function handleBackup(request: Request, env: Env): Promise<Response> {
         return new Response(JSON.stringify({
             success: false,
             error: error.message || '备份失败'
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
+}
+
+// POST /api/sync (with action=restore) - 从备份恢复并创建回滚点
+async function handleRestoreBackup(request: Request, env: Env): Promise<Response> {
+    // 鉴权检查
+    if (!isAuthenticated(request, env)) {
+        return new Response(JSON.stringify({
+            success: false,
+            error: 'Unauthorized'
+        }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    try {
+        const body = await request.json() as { backupKey?: string; deviceId?: string };
+        const backupKey = body.backupKey;
+
+        if (!backupKey || !backupKey.startsWith(KV_BACKUP_PREFIX)) {
+            return new Response(JSON.stringify({
+                success: false,
+                error: '无效的备份 key'
+            }), {
+                status: 400,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        const backupData = await env.YNAV_KV.get(backupKey, 'json') as YNavSyncData | null;
+        if (!backupData) {
+            return new Response(JSON.stringify({
+                success: false,
+                error: '备份不存在或已过期'
+            }), {
+                status: 404,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        const existingData = await env.YNAV_KV.get(KV_MAIN_DATA_KEY, 'json') as YNavSyncData | null;
+        const now = Date.now();
+        let rollbackKey: string | null = null;
+
+        if (existingData) {
+            const rollbackTimestamp = new Date(now).toISOString().replace(/[:.]/g, '-').split('.')[0];
+            rollbackKey = `${KV_BACKUP_PREFIX}rollback-${rollbackTimestamp}`;
+            const rollbackData: YNavSyncData = {
+                ...existingData,
+                meta: {
+                    ...existingData.meta,
+                    updatedAt: now,
+                    deviceId: body.deviceId || existingData.meta.deviceId
+                }
+            };
+            await env.YNAV_KV.put(rollbackKey, JSON.stringify(rollbackData), {
+                expirationTtl: BACKUP_TTL_SECONDS
+            });
+        }
+
+        const newVersion = (existingData?.meta?.version ?? 0) + 1;
+        const restoredData: YNavSyncData = {
+            ...backupData,
+            meta: {
+                ...(backupData.meta || {}),
+                updatedAt: now,
+                deviceId: body.deviceId || backupData.meta?.deviceId || 'unknown',
+                version: newVersion
+            }
+        };
+
+        await env.YNAV_KV.put(KV_MAIN_DATA_KEY, JSON.stringify(restoredData));
+
+        return new Response(JSON.stringify({
+            success: true,
+            data: restoredData,
+            rollbackKey
+        }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } catch (error: any) {
+        return new Response(JSON.stringify({
+            success: false,
+            error: error.message || '恢复失败'
         }), {
             status: 500,
             headers: { 'Content-Type': 'application/json' }
@@ -288,6 +376,9 @@ export const onRequest = async (context: { request: Request; env: Env }) => {
     if (request.method === 'POST') {
         if (action === 'backup') {
             return handleBackup(request, env);
+        }
+        if (action === 'restore') {
+            return handleRestoreBackup(request, env);
         }
         return handlePost(request, env);
     }

@@ -127,6 +127,7 @@ function App() {
     pushToCloud,
     schedulePush,
     createBackup,
+    restoreBackup,
     resolveConflict: resolveSyncConflict
   } = useSyncEngine({
     onConflict: handleSyncConflict,
@@ -509,6 +510,34 @@ function App() {
     }
   }, [pullFromCloud, handleSyncComplete, getLocalSyncMeta, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, buildSyncData, handleSyncConflict]);
 
+  const handleRestoreBackup = useCallback(async (backupKey: string) => {
+    const confirmed = await confirm({
+      title: '恢复云端备份',
+      message: '此操作将用所选备份覆盖本地数据，并在云端创建一个回滚点。',
+      confirmText: '恢复',
+      cancelText: '取消',
+      variant: 'danger'
+    });
+    if (!confirmed) return false;
+
+    const restoredData = await restoreBackup(backupKey);
+    if (!restoredData) {
+      notify('恢复失败，请稍后重试', 'error');
+      return false;
+    }
+
+    handleSyncComplete(restoredData);
+    prevSyncDataRef.current = JSON.stringify(buildSyncData(
+      restoredData.links,
+      restoredData.categories,
+      restoredData.searchConfig,
+      restoredData.aiConfig,
+      restoredData.siteSettings
+    ));
+    notify('已恢复到所选备份，并创建回滚点', 'success');
+    return true;
+  }, [confirm, restoreBackup, handleSyncComplete, notify, buildSyncData]);
+
   // === Render ===
   return (
     <div className={`flex h-screen overflow-hidden ${toneClasses.text}`}>
@@ -544,6 +573,7 @@ function App() {
           onUpdateLinks={(newLinks) => updateData(newLinks, categories)}
           onOpenImport={() => setIsImportModalOpen(true)}
           onCreateBackup={handleCreateBackup}
+          onRestoreBackup={handleRestoreBackup}
           closeOnBackdrop={closeOnBackdrop}
         />
 
