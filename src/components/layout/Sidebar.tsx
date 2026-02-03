@@ -17,6 +17,7 @@ interface SidebarProps {
   isPrivateUnlocked: boolean;
   privateCount: number;
   repoUrl: string;
+  readOnly?: boolean;
   onSelectAll: () => void;
   onSelectCategory: (category: Category) => void;
   onSelectPrivate: () => void;
@@ -38,6 +39,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   isPrivateUnlocked,
   privateCount,
   repoUrl,
+  readOnly = false,
   onSelectAll,
   onSelectCategory,
   onSelectPrivate,
@@ -207,13 +209,15 @@ const Sidebar: React.FC<SidebarProps> = ({
               分类目录
             </span>
           )}
-          <button
-            onClick={onOpenCategoryManager}
-            className="p-1 text-slate-400 hover:text-accent hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors"
-            title="管理分类"
-          >
-            <Settings size={13} />
-          </button>
+          {!readOnly && (
+            <button
+              onClick={onOpenCategoryManager}
+              className="p-1 text-slate-400 hover:text-accent hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors"
+              title="管理分类"
+            >
+              <Settings size={13} />
+            </button>
+          )}
         </div>
 
         {/* Category List */}

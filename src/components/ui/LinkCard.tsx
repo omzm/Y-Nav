@@ -8,6 +8,7 @@ interface LinkCardProps {
     siteCardStyle: 'detailed' | 'simple';
     isBatchEditMode: boolean;
     isSelected: boolean;
+    readOnly?: boolean;
     onSelect: (id: string) => void;
     onContextMenu: (e: React.MouseEvent, link: LinkItem) => void;
     onEdit: (link: LinkItem) => void;
@@ -18,6 +19,7 @@ const LinkCard: React.FC<LinkCardProps> = ({
     siteCardStyle,
     isBatchEditMode,
     isSelected,
+    readOnly = false,
     onSelect,
     onContextMenu,
     onEdit
@@ -124,7 +126,7 @@ const LinkCard: React.FC<LinkCardProps> = ({
             )}
 
             {/* Hover Actions */}
-            {!isBatchEditMode && (
+            {!isBatchEditMode && !readOnly && (
                 <div className={`
                     absolute opacity-0 group-hover:opacity-100 transition-all duration-200
                     ${isDetailedView ? 'top-3 right-3' : 'top-1/2 -translate-y-1/2 right-2'}

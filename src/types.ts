@@ -23,6 +23,7 @@ export interface SiteSettings {
   navTitle: string;
   favicon: string;
   cardStyle: 'detailed' | 'simple';
+  siteMode?: 'personal' | 'webmaster'; // 'webmaster' = public read-only site
   accentColor?: string; // RGB values e.g. "99 102 241"
   grayScale?: 'slate' | 'zinc' | 'neutral'; // Background tone
   closeOnBackdrop?: boolean; // Allow closing modals by clicking the backdrop

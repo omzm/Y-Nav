@@ -71,8 +71,8 @@ const loadCurrentData = async (env: Env): Promise<YNavSyncData | null> => {
     return legacy;
 };
 
-// 辅助函数：验证密码
-const isAuthenticated = (request: Request, env: Env): boolean => {
+// 辅助函数：验证写入密码（站长权限）
+const isWriteAuthenticated = (request: Request, env: Env): boolean => {
     // 如果服务端未设置密码，则默认允许访问（为了兼容性和简易部署）
     if (!env.SYNC_PASSWORD || env.SYNC_PASSWORD.trim() === '') {
         return true;
@@ -85,16 +85,26 @@ const isAuthenticated = (request: Request, env: Env): boolean => {
     return authHeader === env.SYNC_PASSWORD;
 };
 
+const getWriteAuthStatus = (request: Request, env: Env) => {
+    const passwordRequired = !!(env.SYNC_PASSWORD && env.SYNC_PASSWORD.trim() !== '');
+    const canWrite = !passwordRequired || isWriteAuthenticated(request, env);
+    return { passwordRequired, canWrite };
+};
+
+async function handleWhoAmI(request: Request, env: Env): Promise<Response> {
+    const { passwordRequired, canWrite } = getWriteAuthStatus(request, env);
+    return new Response(JSON.stringify({
+        success: true,
+        apiVersion: SYNC_API_VERSION,
+        passwordRequired,
+        canWrite
+    }), {
+        headers: { 'Content-Type': 'application/json' }
+    });
+}
+
 // GET /api/sync - 读取云端数据
 async function handleGet(request: Request, env: Env): Promise<Response> {
-    // 鉴权检查
-    if (!isAuthenticated(request, env)) {
-        return new Response(JSON.stringify({
-            success: false,
-            error: 'Unauthorized: 密码错误或未配置'
-        }), { status: 401, headers: { 'Content-Type': 'application/json' } });
-    }
-
     try {
         const data = await loadCurrentData(env);
 
@@ -109,10 +119,35 @@ async function handleGet(request: Request, env: Env): Promise<Response> {
             });
         }
 
+        const auth = getWriteAuthStatus(request, env);
+        // Public read is only allowed in webmaster mode, and only returns a safe subset.
+        const siteMode = (data as any)?.siteSettings?.siteMode;
+        const isWebmaster = siteMode === 'webmaster';
+
+        if (!auth.canWrite && !isWebmaster) {
+            return new Response(JSON.stringify({
+                success: false,
+                apiVersion: SYNC_API_VERSION,
+                error: 'Unauthorized'
+            }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        const publicData: YNavSyncData = {
+            links: data.links,
+            categories: data.categories,
+            searchConfig: data.searchConfig,
+            siteSettings: data.siteSettings,
+            schemaVersion: data.schemaVersion,
+            // Never expose private vault or AI keys to public visitors
+            privateVault: undefined,
+            aiConfig: undefined,
+            meta: data.meta
+        };
+
         return new Response(JSON.stringify({
             success: true,
             apiVersion: SYNC_API_VERSION,
-            data
+            data: auth.canWrite ? data : publicData
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
@@ -130,7 +165,7 @@ async function handleGet(request: Request, env: Env): Promise<Response> {
 // POST /api/sync - 写入云端数据
 async function handlePost(request: Request, env: Env): Promise<Response> {
     // 鉴权检查
-    if (!isAuthenticated(request, env)) {
+    if (!isWriteAuthenticated(request, env)) {
         return new Response(JSON.stringify({
             success: false,
             error: 'Unauthorized: 密码错误或未配置'
@@ -208,7 +243,7 @@ async function handlePost(request: Request, env: Env): Promise<Response> {
 // POST /api/sync (with action=backup) - 创建快照备份
 async function handleBackup(request: Request, env: Env): Promise<Response> {
     // 鉴权检查 (虽然复用了 router，但为了安全再次明确)
-    if (!isAuthenticated(request, env)) {
+    if (!isWriteAuthenticated(request, env)) {
         return new Response(JSON.stringify({
             success: false,
             error: 'Unauthorized'
@@ -261,7 +296,7 @@ async function handleBackup(request: Request, env: Env): Promise<Response> {
 // POST /api/sync (with action=restore) - 从备份恢复并创建回滚点
 async function handleRestoreBackup(request: Request, env: Env): Promise<Response> {
     // 鉴权检查
-    if (!isAuthenticated(request, env)) {
+    if (!isWriteAuthenticated(request, env)) {
         return new Response(JSON.stringify({
             success: false,
             error: 'Unauthorized'
@@ -350,7 +385,7 @@ async function handleRestoreBackup(request: Request, env: Env): Promise<Response
 // GET /api/sync (with action=backups) - 获取备份列表
 async function handleListBackups(request: Request, env: Env): Promise<Response> {
     // 鉴权检查
-    if (!isAuthenticated(request, env)) {
+    if (!isWriteAuthenticated(request, env)) {
         return new Response(JSON.stringify({
             success: false,
             error: 'Unauthorized'
@@ -412,7 +447,7 @@ async function handleListBackups(request: Request, env: Env): Promise<Response> 
 // DELETE /api/sync (with action=backup) - 删除指定备份
 async function handleDeleteBackup(request: Request, env: Env): Promise<Response> {
     // 鉴权检查
-    if (!isAuthenticated(request, env)) {
+    if (!isWriteAuthenticated(request, env)) {
         return new Response(JSON.stringify({
             success: false,
             error: 'Unauthorized'
@@ -476,6 +511,9 @@ export const onRequest = async (context: { request: Request; env: Env }) => {
 
     // 根据请求方法和 action 参数路由
     if (request.method === 'GET') {
+        if (action === 'whoami') {
+            return handleWhoAmI(request, env);
+        }
         if (action === 'backups') {
             return handleListBackups(request, env);
         }

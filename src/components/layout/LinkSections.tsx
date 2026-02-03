@@ -48,6 +48,7 @@ interface LinkSectionsProps {
   onLinkSelect: (id: string) => void;
   onLinkContextMenu: (e: React.MouseEvent, link: LinkItem) => void;
   onLinkEdit: (link: LinkItem) => void;
+  readOnly?: boolean;
   isPrivateUnlocked: boolean;
   onPrivateUnlock: (password?: string) => Promise<boolean>;
   privateUnlockHint: string;
@@ -108,6 +109,7 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
   onLinkSelect,
   onLinkContextMenu,
   onLinkEdit,
+  readOnly = false,
   isPrivateUnlocked,
   onPrivateUnlock,
   privateUnlockHint,
@@ -424,7 +426,7 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
               </div>
 
               {/* Batch Edit Controls */}
-              {selectedCategory !== 'all' && !isSortingMode && !isPrivateCategory && (
+              {selectedCategory !== 'all' && !isSortingMode && !isPrivateCategory && !readOnly && (
                 <div className="flex items-center gap-2">
                   {!isBatchEditMode ? (
                     <button
@@ -536,7 +538,7 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
                     <Search size={32} className="opacity-40" />
                   </div>
                   <p className="text-sm">没有找到相关内容</p>
-                  {selectedCategory !== 'all' && (
+                  {selectedCategory !== 'all' && !readOnly && (
                     <button onClick={onAddLink} className="mt-4 text-sm text-accent hover:underline focus:outline-none focus:ring-2 focus:ring-accent/50 rounded">添加一个?</button>
                   )}
                 </div>
@@ -573,6 +575,7 @@ const LinkSections: React.FC<LinkSectionsProps> = ({
                         siteCardStyle={siteCardStyle}
                         isBatchEditMode={isBatchEditMode}
                         isSelected={selectedLinks.has(link.id)}
+                        readOnly={readOnly}
                         onSelect={onLinkSelect}
                         onContextMenu={onLinkContextMenu}
                         onEdit={onLinkEdit}

@@ -27,6 +27,9 @@ interface SettingsModalProps {
   onTogglePrivacyAutoUnlock: (enabled: boolean) => void;
   syncStatus?: SyncStatus;
   lastSyncTime?: number | null;
+  webmasterUnlocked?: boolean;
+  onWebmasterUnlockedChange?: (unlocked: boolean) => void;
+  readOnly?: boolean;
   closeOnBackdrop?: boolean;
 }
 
@@ -51,14 +54,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onTogglePrivacyAutoUnlock,
   syncStatus,
   lastSyncTime,
+  webmasterUnlocked,
+  onWebmasterUnlockedChange,
+  readOnly = false,
   closeOnBackdrop = true
 }) => {
   const [activeTab, setActiveTab] = useState<'site' | 'ai' | 'appearance' | 'data'>('site');
   const [localConfig, setLocalConfig] = useState<AIConfig>(config);
   const [localSiteSettings, setLocalSiteSettings] = useState<SiteSettings>(() => ({
     title: siteSettings?.title || '元启 - AI 智能导航',
+    navTitle: siteSettings?.navTitle || '元启',
     favicon: siteSettings?.favicon || '',
     cardStyle: siteSettings?.cardStyle || 'detailed',
+    siteMode: siteSettings?.siteMode || 'personal',
     accentColor: siteSettings?.accentColor || '99 102 241',
     grayScale: siteSettings?.grayScale || 'slate',
     closeOnBackdrop: siteSettings?.closeOnBackdrop ?? false,
@@ -72,8 +80,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalConfig(config);
       setLocalSiteSettings({
         title: siteSettings?.title || '元启 - AI 智能导航',
+        navTitle: siteSettings?.navTitle || '元启',
         favicon: siteSettings?.favicon || '',
         cardStyle: siteSettings?.cardStyle || 'detailed',
+        siteMode: siteSettings?.siteMode || 'personal',
         accentColor: siteSettings?.accentColor || '99 102 241',
         grayScale: siteSettings?.grayScale || 'slate',
         closeOnBackdrop: siteSettings?.closeOnBackdrop ?? false,
@@ -94,6 +104,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSave = () => {
+    if (readOnly) return;
     onSave(localConfig, localSiteSettings);
     onClose();
   };
@@ -203,6 +214,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
               onTogglePrivacyAutoUnlock={onTogglePrivacyAutoUnlock}
               syncStatus={syncStatus}
               lastSyncTime={lastSyncTime}
+              siteSettings={localSiteSettings}
+              onSiteSettingChange={handleSiteChange}
+              webmasterUnlocked={webmasterUnlocked}
+              onWebmasterUnlockedChange={onWebmasterUnlockedChange}
             />
           )}
         </div>
@@ -211,7 +226,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="p-6 pt-2 border-t border-transparent shrink-0">
           <button
             onClick={handleSave}
-            className="w-full bg-slate-900 dark:bg-accent text-white font-bold py-3.5 px-4 rounded-xl hover:bg-slate-800 dark:hover:bg-accent/90 transition-all shadow-lg shadow-slate-200 dark:shadow-none active:scale-[0.99] text-sm flex items-center justify-center gap-2"
+            disabled={readOnly}
+            title={readOnly ? '站长模式：访客只读，需验证站长密码后才能保存' : undefined}
+            className="w-full bg-slate-900 dark:bg-accent text-white font-bold py-3.5 px-4 rounded-xl hover:bg-slate-800 dark:hover:bg-accent/90 transition-all shadow-lg shadow-slate-200 dark:shadow-none active:scale-[0.99] text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Save size={16} />
             <span>保存设置</span>

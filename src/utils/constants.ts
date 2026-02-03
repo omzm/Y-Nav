@@ -12,6 +12,7 @@ export const DEVICE_INFO_KEY = 'ynav_device_info';
 export const SYNC_META_KEY = 'ynav_sync_meta';
 export const SYNC_PASSWORD_KEY = 'ynav_sync_password';
 export const LAST_SYNC_KEY = 'ynav_last_sync';
+export const WEBMASTER_UNLOCKED_KEY = 'ynav_webmaster_unlocked';
 
 // Privacy Vault Keys
 export const PRIVATE_VAULT_KEY = 'ynav_private_vault_v1';

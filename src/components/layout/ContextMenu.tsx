@@ -6,6 +6,7 @@ interface ContextMenuProps {
   isOpen: boolean;
   position: { x: number; y: number };
   categories: Category[];
+  readOnly?: boolean;
   onClose: () => void;
   onCopyLink: () => void;
   onEditLink: () => void;
@@ -19,6 +20,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
   isOpen,
   position,
   categories,
+  readOnly = false,
   onClose,
   onCopyLink,
   onEditLink,
@@ -65,19 +67,23 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
     y: Math.min(position.y, window.innerHeight - 300)
   };
 
-  const menuItems = [
-    { icon: Copy, label: '复制链接', onClick: onCopyLink },
-    { icon: CopyPlus, label: '复制一份', onClick: onDuplicateLink },
-    {
-      icon: FolderInput,
-      label: '转移分组',
-      onClick: () => { },
-      hasSubmenu: true
-    },
-    { icon: Edit2, label: '编辑链接', onClick: onEditLink },
-    { icon: Pin, label: '置顶/取消置顶', onClick: onTogglePin },
-    { icon: Trash2, label: '删除链接', onClick: onDeleteLink, className: 'text-red-500 dark:text-red-400' }
-  ];
+  const menuItems = readOnly
+    ? [
+      { icon: Copy, label: '复制链接', onClick: onCopyLink }
+    ]
+    : [
+      { icon: Copy, label: '复制链接', onClick: onCopyLink },
+      { icon: CopyPlus, label: '复制一份', onClick: onDuplicateLink },
+      {
+        icon: FolderInput,
+        label: '转移分组',
+        onClick: () => { },
+        hasSubmenu: true
+      },
+      { icon: Edit2, label: '编辑链接', onClick: onEditLink },
+      { icon: Pin, label: '置顶/取消置顶', onClick: onTogglePin },
+      { icon: Trash2, label: '删除链接', onClick: onDeleteLink, className: 'text-red-500 dark:text-red-400' }
+    ];
 
   return (
     <div

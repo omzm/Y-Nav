@@ -18,6 +18,7 @@ interface MainHeaderProps {
   canSortCategory: boolean;
   isSortingPinned: boolean;
   isSortingCategory: boolean;
+  readOnly?: boolean;
   onOpenSidebar: () => void;
   onSetTheme: (mode: 'light' | 'dark' | 'system') => void;
   onViewModeChange: (mode: 'simple' | 'detailed') => void;
@@ -57,6 +58,7 @@ const MainHeader: React.FC<MainHeaderProps> = ({
   canSortCategory,
   isSortingPinned,
   isSortingCategory,
+  readOnly = false,
   onOpenSidebar,
   onSetTheme,
   onViewModeChange,
@@ -389,16 +391,18 @@ const MainHeader: React.FC<MainHeaderProps> = ({
           </div>
 
           {/* Add Link - Primary Action */}
-          <button
-            onClick={onAddLink}
-            className="relative overflow-hidden group flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-accent to-accent/80 hover:from-accent hover:to-accent/90 text-white shadow-lg shadow-accent/20 hover:shadow-accent/30 active:scale-95 transition-all duration-200"
-            title="添加链接"
-          >
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent w-full h-full animate-shimmer-slow pointer-events-none" />
-            <span className="relative z-10 flex items-center gap-0.5">
-              <span className="text-lg leading-none">+</span> <span className="hidden sm:inline">添加</span>
-            </span>
-          </button>
+          {!readOnly && (
+            <button
+              onClick={onAddLink}
+              className="relative overflow-hidden group flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-accent to-accent/80 hover:from-accent hover:to-accent/90 text-white shadow-lg shadow-accent/20 hover:shadow-accent/30 active:scale-95 transition-all duration-200"
+              title="添加链接"
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent w-full h-full animate-shimmer-slow pointer-events-none" />
+              <span className="relative z-10 flex items-center gap-0.5">
+                <span className="text-lg leading-none">+</span> <span className="hidden sm:inline">添加</span>
+              </span>
+            </button>
+          )}
         </div>
       </div>
 

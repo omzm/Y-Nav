@@ -14,6 +14,7 @@ const DEFAULT_SITE_SETTINGS: SiteSettings = {
     navTitle: '元启',
     favicon: '',
     cardStyle: 'detailed',
+    siteMode: 'personal',
     accentColor: '99 102 241',
     grayScale: 'slate',
     closeOnBackdrop: false,

@@ -42,6 +42,7 @@ import {
   PRIVACY_USE_SEPARATE_PASSWORD_KEY,
   SYNC_META_KEY,
   SYNC_PASSWORD_KEY,
+  WEBMASTER_UNLOCKED_KEY,
   getDeviceId
 } from './utils/constants';
 import { decryptPrivateVault, encryptPrivateVault } from './utils/privateVault';
@@ -140,6 +141,39 @@ function App() {
     navTitleShort
   } = useConfig();
 
+  // === Webmaster Mode (Read-only for visitors) ===
+  const [remoteSiteMode, setRemoteSiteMode] = useState<'personal' | 'webmaster' | null>(null);
+  const [webmasterUnlocked, setWebmasterUnlocked] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem(WEBMASTER_UNLOCKED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const setWebmasterUnlockedPersist = useCallback((unlocked: boolean) => {
+    setWebmasterUnlocked(unlocked);
+    try {
+      if (unlocked) {
+        sessionStorage.setItem(WEBMASTER_UNLOCKED_KEY, '1');
+      } else {
+        sessionStorage.removeItem(WEBMASTER_UNLOCKED_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Strong read-only is enforced only when the remote (cloud) config is webmaster mode.
+  // This prevents a local toggle from locking the owner before the change is pushed.
+  const isReadOnly = remoteSiteMode === 'webmaster' && !webmasterUnlocked;
+
+  const ensureEditable = useCallback((actionName: string = '此操作') => {
+    if (!isReadOnly) return true;
+    notify(`站长模式：访客只读，无法${actionName}`, 'warning');
+    return false;
+  }, [isReadOnly, notify]);
+
   // === Sync Engine Hook ===
   const handleSyncConflict = useCallback((conflict: SyncConflict) => {
     setCurrentConflict(conflict);
@@ -159,6 +193,12 @@ function App() {
     }
     if (data.siteSettings) {
       restoreSiteSettings(data.siteSettings);
+      const mode = (data.siteSettings as any)?.siteMode;
+      if (mode === 'webmaster' || mode === 'personal') {
+        setRemoteSiteMode(mode);
+      } else if (mode === undefined) {
+        setRemoteSiteMode('personal');
+      }
     }
     if (typeof data.privateVault === 'string') {
       setPrivateVaultCipher(data.privateVault);
@@ -445,6 +485,21 @@ function App() {
 
   const activeDisplayedLinks = isPrivateView ? displayedPrivateLinks : displayedLinks;
 
+  const updateDataForMutations = useCallback((nextLinks: LinkItem[], nextCategories: Category[]) => {
+    if (!ensureEditable('修改数据')) return;
+    updateData(nextLinks, nextCategories);
+  }, [ensureEditable, updateData]);
+
+  const reorderLinksGuarded = useCallback((activeId: string, overId: string, targetCategory: string) => {
+    if (!ensureEditable('排序')) return;
+    reorderLinks(activeId, overId, targetCategory);
+  }, [ensureEditable, reorderLinks]);
+
+  const reorderPinnedLinksGuarded = useCallback((activeId: string, overId: string) => {
+    if (!ensureEditable('排序')) return;
+    reorderPinnedLinks(activeId, overId);
+  }, [ensureEditable, reorderPinnedLinks]);
+
   // === Batch Edit ===
   const {
     isBatchEditMode,
@@ -459,19 +514,19 @@ function App() {
     links,
     categories,
     displayedLinks,
-    updateData
+    updateData: updateDataForMutations
   });
 
   const emptySelection = useMemo(() => new Set<string>(), []);
   const effectiveIsBatchEditMode = isPrivateView ? false : isBatchEditMode;
   const effectiveSelectedLinks = isPrivateView ? emptySelection : selectedLinks;
   const effectiveSelectedLinksCount = isPrivateView ? 0 : selectedLinks.size;
-  const effectiveToggleBatchEditMode = isPrivateView ? () => {} : toggleBatchEditMode;
-  const effectiveSelectAll = isPrivateView ? () => {} : handleSelectAll;
-  const effectiveBatchDelete = isPrivateView ? () => {} : handleBatchDelete;
-  const effectiveBatchPin = isPrivateView ? () => {} : handleBatchPin;
-  const effectiveBatchMove = isPrivateView ? () => {} : handleBatchMove;
-  const handleLinkSelect = isPrivateView ? () => {} : toggleLinkSelection;
+  const effectiveToggleBatchEditMode = (isPrivateView || isReadOnly) ? () => {} : toggleBatchEditMode;
+  const effectiveSelectAll = (isPrivateView || isReadOnly) ? () => {} : handleSelectAll;
+  const effectiveBatchDelete = (isPrivateView || isReadOnly) ? () => {} : handleBatchDelete;
+  const effectiveBatchPin = (isPrivateView || isReadOnly) ? () => {} : handleBatchPin;
+  const effectiveBatchMove = (isPrivateView || isReadOnly) ? () => {} : handleBatchMove;
+  const handleLinkSelect = (isPrivateView || isReadOnly) ? () => {} : toggleLinkSelection;
 
   // === Context Menu ===
   const {
@@ -487,8 +542,11 @@ function App() {
   } = useContextMenu({
     links,
     categories,
-    updateData,
-    onEditLink: openEditLinkModal,
+    updateData: updateDataForMutations,
+    onEditLink: (link) => {
+      if (!ensureEditable('编辑')) return;
+      openEditLinkModal(link);
+    },
     isBatchEditMode
   });
 
@@ -510,14 +568,15 @@ function App() {
     links,
     categories,
     selectedCategory,
-    updateData,
-    reorderLinks,
-    reorderPinnedLinks
+    updateData: updateDataForMutations,
+    reorderLinks: reorderLinksGuarded,
+    reorderPinnedLinks: reorderPinnedLinksGuarded
   });
 
   // === Computed: Sorting States ===
-  const canSortPinned = selectedCategory === 'all' && !searchQuery && pinnedLinks.length > 1;
+  const canSortPinned = !isReadOnly && selectedCategory === 'all' && !searchQuery && pinnedLinks.length > 1;
   const canSortCategory = selectedCategory !== 'all'
+    && !isReadOnly
     && selectedCategory !== PRIVATE_CATEGORY_ID
     && displayedLinks.length > 1;
 
@@ -572,23 +631,27 @@ function App() {
 
   // === Handlers ===
   const handleImportConfirm = (newLinks: LinkItem[], newCategories: Category[]) => {
+    if (!ensureEditable('导入')) return;
     importData(newLinks, newCategories);
     setIsImportModalOpen(false);
     notify(`成功导入 ${newLinks.length} 个新书签!`, 'success');
   };
 
   const handleAddLink = (data: Omit<LinkItem, 'id' | 'createdAt'>) => {
+    if (!ensureEditable('添加')) return;
     addLink(data);
     setPrefillLink(undefined);
   };
 
   const handleEditLink = (data: Omit<LinkItem, 'id' | 'createdAt'>) => {
+    if (!ensureEditable('编辑')) return;
     if (!editingLink) return;
     updateLink({ ...data, id: editingLink.id });
     setEditingLink(undefined);
   };
 
   const handleDeleteLink = async (id: string) => {
+    if (!ensureEditable('删除')) return;
     const shouldDelete = await confirm({
       title: '删除链接',
       message: '确定删除此链接吗？',
@@ -628,6 +691,7 @@ function App() {
   }, [isPrivateUnlocked, notify]);
 
   const handlePrivateAddLink = useCallback(async (data: Omit<LinkItem, 'id' | 'createdAt'>) => {
+    if (!ensureEditable('添加')) return;
     if (!isPrivateUnlocked) {
       notify('请先解锁隐私分组', 'warning');
       return;
@@ -646,9 +710,10 @@ function App() {
       order: maxOrder + 1
     };
     await persistPrivateVault([...privateLinks, newLink]);
-  }, [isPrivateUnlocked, notify, persistPrivateVault, privateLinks]);
+  }, [ensureEditable, isPrivateUnlocked, notify, persistPrivateVault, privateLinks]);
 
   const handlePrivateEditLink = useCallback(async (data: Omit<LinkItem, 'createdAt'>) => {
+    if (!ensureEditable('编辑')) return;
     if (!isPrivateUnlocked) {
       notify('请先解锁隐私分组', 'warning');
       return;
@@ -661,9 +726,10 @@ function App() {
       pinnedOrder: undefined
     } : link);
     await persistPrivateVault(updatedLinks);
-  }, [isPrivateUnlocked, notify, persistPrivateVault, privateLinks]);
+  }, [ensureEditable, isPrivateUnlocked, notify, persistPrivateVault, privateLinks]);
 
   const handlePrivateDeleteLink = useCallback(async (id: string) => {
+    if (!ensureEditable('删除')) return;
     if (!isPrivateUnlocked) {
       notify('请先解锁隐私分组', 'warning');
       return;
@@ -679,23 +745,25 @@ function App() {
     if (!shouldDelete) return;
     const updated = privateLinks.filter(link => link.id !== id);
     await persistPrivateVault(updated);
-  }, [confirm, isPrivateUnlocked, notify, persistPrivateVault, privateLinks]);
+  }, [confirm, ensureEditable, isPrivateUnlocked, notify, persistPrivateVault, privateLinks]);
 
   const handleAddLinkRequest = useCallback(() => {
+    if (!ensureEditable('添加')) return;
     if (isPrivateView) {
       openPrivateAddModal();
       return;
     }
     openAddLinkModal();
-  }, [isPrivateView, openPrivateAddModal, openAddLinkModal]);
+  }, [ensureEditable, isPrivateView, openPrivateAddModal, openAddLinkModal]);
 
   const handleLinkEdit = useCallback((link: LinkItem) => {
+    if (!ensureEditable('编辑')) return;
     if (isPrivateView) {
       openPrivateEditModal(link);
       return;
     }
     openEditLinkModal(link);
-  }, [isPrivateView, openEditLinkModal, openPrivateEditModal]);
+  }, [ensureEditable, isPrivateView, openEditLinkModal, openPrivateEditModal]);
 
   const handleLinkContextMenu = useCallback((event: React.MouseEvent, link: LinkItem) => {
     if (isPrivateView) return;
@@ -705,18 +773,22 @@ function App() {
   const togglePin = (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (!ensureEditable('置顶')) return;
     togglePinStore(id);
   };
 
   const handleUpdateCategories = (newCats: Category[]) => {
+    if (!ensureEditable('修改分类')) return;
     updateData(links, newCats);
   };
 
   const handleDeleteCategory = (catId: string) => {
+    if (!ensureEditable('删除分类')) return;
     deleteCategoryStore(catId);
   };
 
   const handleDeleteCategories = (catIds: string[]) => {
+    if (!ensureEditable('删除分类')) return;
     deleteCategoriesStore(catIds);
   };
 
@@ -764,6 +836,9 @@ function App() {
     if (addUrl) {
       const addTitle = urlParams.get('add_title') || '';
       window.history.replaceState({}, '', window.location.pathname);
+      if (!ensureEditable('添加')) {
+        return;
+      }
       if (selectedCategory === PRIVATE_CATEGORY_ID) {
         if (!isPrivateUnlocked) {
           notify('请先解锁隐私分组', 'warning');
@@ -791,6 +866,7 @@ function App() {
       openAddLinkModal();
     }
   }, [
+    ensureEditable,
     setPrefillLink,
     setEditingLink,
     openAddLinkModal,
@@ -836,6 +912,11 @@ function App() {
       const cloudData = await pullFromCloud();
 
       if (cloudData && cloudData.links && cloudData.categories) {
+        // Webmaster mode: always use remote data for visitors (read-only public site)
+        if ((cloudData as any).siteSettings?.siteMode === 'webmaster') {
+          handleSyncComplete(cloudData);
+          return;
+        }
         // 版本不一致时提示用户选择
         if (cloudData.meta.version !== localVersion) {
           const localData = buildSyncData(
@@ -855,7 +936,7 @@ function App() {
     };
 
     checkCloudData();
-  }, [isLoaded, pullFromCloud, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, privateVaultCipher, buildSyncData, handleSyncConflict, getLocalSyncMeta]);
+  }, [isLoaded, pullFromCloud, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, privateVaultCipher, buildSyncData, handleSyncConflict, getLocalSyncMeta, handleSyncComplete]);
 
   // === KV Sync: Auto-sync on data change ===
   const prevSyncDataRef = useRef<string | null>(null);
@@ -864,6 +945,7 @@ function App() {
     // 跳过初始加载阶段
     if (!isLoaded || !hasInitialSyncRun.current || currentConflict) return;
     if (isSyncPasswordRefreshingRef.current) return;
+    if (isReadOnly) return;
 
     const syncData = buildSyncData(
       links,
@@ -879,7 +961,7 @@ function App() {
       prevSyncDataRef.current = serialized;
       schedulePush(syncData);
     }
-  }, [links, categories, isLoaded, searchMode, externalSearchSources, aiConfig, siteSettings, privateVaultCipher, schedulePush, buildSyncData, currentConflict]);
+  }, [links, categories, isLoaded, searchMode, externalSearchSources, aiConfig, siteSettings, privateVaultCipher, schedulePush, buildSyncData, currentConflict, isReadOnly]);
 
   // === Sync Conflict Resolution ===
   const handleResolveConflict = useCallback((choice: 'local' | 'remote') => {
@@ -906,6 +988,7 @@ function App() {
   }, [links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, privateVaultCipher, pushToCloud]);
 
   const handleCreateBackup = useCallback(async () => {
+    if (!ensureEditable('创建备份')) return false;
     const syncData = buildSyncData(
       links,
       categories,
@@ -921,7 +1004,7 @@ function App() {
       notify('备份失败，请稍后重试', 'error');
     }
     return success;
-  }, [links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, privateVaultCipher, createBackup, notify]);
+  }, [ensureEditable, links, categories, searchMode, externalSearchSources, aiConfig, siteSettings, privateVaultCipher, createBackup, notify, buildSyncData]);
 
   const handleManualPull = useCallback(async () => {
     const localMeta = getLocalSyncMeta();
@@ -930,6 +1013,10 @@ function App() {
     const localDeviceId = localMeta?.deviceId || getDeviceId();
     const cloudData = await pullFromCloud();
     if (cloudData && cloudData.links && cloudData.categories) {
+      if ((cloudData as any).siteSettings?.siteMode === 'webmaster') {
+        handleSyncComplete(cloudData);
+        return;
+      }
       if (cloudData.meta.version !== localVersion) {
         const localData = buildSyncData(
           links,
@@ -988,6 +1075,7 @@ function App() {
   }, []);
 
   const handleRestoreBackup = useCallback(async (backupKey: string) => {
+    if (!ensureEditable('恢复备份')) return false;
     const confirmed = await confirm({
       title: '恢复云端备份',
       message: '此操作将用所选备份覆盖本地数据，并在云端创建一个回滚点。',
@@ -1014,9 +1102,10 @@ function App() {
     ));
     notify('已恢复到所选备份，并创建回滚点', 'success');
     return true;
-  }, [confirm, restoreBackup, handleSyncComplete, notify, buildSyncData]);
+  }, [ensureEditable, confirm, restoreBackup, handleSyncComplete, notify, buildSyncData]);
 
   const handleDeleteBackup = useCallback(async (backupKey: string) => {
+    if (!ensureEditable('删除备份')) return false;
     const confirmed = await confirm({
       title: '删除备份',
       message: '确定要删除此备份吗?此操作无法撤销。',
@@ -1034,7 +1123,7 @@ function App() {
 
     notify('备份已删除', 'success');
     return true;
-  }, [confirm, deleteBackup, notify]);
+  }, [ensureEditable, confirm, deleteBackup, notify]);
 
   // === Render ===
   return (
@@ -1083,6 +1172,9 @@ function App() {
           onTogglePrivacyAutoUnlock={handleTogglePrivacyAutoUnlock}
           syncStatus={syncStatus}
           lastSyncTime={lastSyncTime}
+          webmasterUnlocked={webmasterUnlocked}
+          onWebmasterUnlockedChange={setWebmasterUnlockedPersist}
+          readOnly={isReadOnly}
           closeOnBackdrop={closeOnBackdrop}
         />
 
@@ -1109,7 +1201,10 @@ function App() {
         <SyncStatusIndicator
           status={syncStatus}
           lastSyncTime={lastSyncTime}
-          onManualSync={handleManualSync}
+          onManualSync={() => {
+            if (!ensureEditable('同步')) return;
+            handleManualSync();
+          }}
           onManualPull={handleManualPull}
         />
       </div>
@@ -1123,27 +1218,30 @@ function App() {
       )}
 
       {/* Sidebar */}
-      <Sidebar
-        sidebarOpen={sidebarOpen}
-        sidebarWidthClass={sidebarWidthClass}
-        isSidebarCollapsed={isSidebarCollapsed}
-        navTitleText={navTitleText}
-        navTitleShort={navTitleShort}
-        selectedCategory={selectedCategory}
-        categories={categories}
-        linkCounts={linkCounts}
-        privacyGroupEnabled={privacyGroupEnabled}
-        isPrivateUnlocked={isPrivateUnlocked}
-        privateCount={privateCount}
-        repoUrl={GITHUB_REPO_URL}
-        onSelectAll={selectAll}
-        onSelectCategory={handleCategoryClick}
-        onSelectPrivate={handleSelectPrivate}
-        onToggleCollapsed={toggleSidebarCollapsed}
-        onOpenCategoryManager={() => setIsCatManagerOpen(true)}
-        onOpenImport={() => setIsImportModalOpen(true)}
-        onOpenSettings={() => setIsSettingsModalOpen(true)}
-      />
+        <Sidebar
+          sidebarOpen={sidebarOpen}
+          sidebarWidthClass={sidebarWidthClass}
+          isSidebarCollapsed={isSidebarCollapsed}
+          navTitleText={navTitleText}
+          navTitleShort={navTitleShort}
+          selectedCategory={selectedCategory}
+          categories={categories}
+          linkCounts={linkCounts}
+          privacyGroupEnabled={privacyGroupEnabled}
+          isPrivateUnlocked={isPrivateUnlocked}
+          privateCount={privateCount}
+          repoUrl={GITHUB_REPO_URL}
+          readOnly={isReadOnly}
+          onSelectAll={selectAll}
+          onSelectCategory={handleCategoryClick}
+          onSelectPrivate={handleSelectPrivate}
+          onToggleCollapsed={toggleSidebarCollapsed}
+          onOpenCategoryManager={() => {
+            if (!ensureEditable('管理分类')) return;
+            setIsCatManagerOpen(true);
+          }}
+          onOpenSettings={() => setIsSettingsModalOpen(true)}
+        />
 
       {/* Main Content */}
       <main className={`flex-1 flex flex-col h-full overflow-hidden relative ${toneClasses.bg}`}>
@@ -1214,6 +1312,7 @@ function App() {
             canSortCategory={canSortCategory}
             isSortingPinned={isSortingPinned}
             isSortingCategory={isSortingCategory}
+            readOnly={isReadOnly}
             onOpenSidebar={openSidebar}
             onSetTheme={setThemeAndApply}
             onViewModeChange={handleViewModeChange}
@@ -1227,9 +1326,13 @@ function App() {
             onPopupHoverChange={setIsPopupHovered}
             onToggleMobileSearch={toggleMobileSearch}
             onToggleSearchSourcePopup={() => setShowSearchSourcePopup(prev => !prev)}
-            onStartPinnedSorting={startPinnedSorting}
+            onStartPinnedSorting={() => {
+              if (!ensureEditable('排序')) return;
+              startPinnedSorting();
+            }}
             onStartCategorySorting={() => {
               if (!isPrivateView) {
+                if (!ensureEditable('排序')) return;
                 startSorting(selectedCategory);
               }
             }}
@@ -1267,6 +1370,7 @@ function App() {
             onLinkSelect={handleLinkSelect}
             onLinkContextMenu={handleLinkContextMenu}
             onLinkEdit={handleLinkEdit}
+            readOnly={isReadOnly}
             isPrivateUnlocked={isPrivateUnlocked}
             onPrivateUnlock={handleUnlockPrivateVault}
             privateUnlockHint={privateUnlockHint}
@@ -1306,6 +1410,7 @@ function App() {
         isOpen={contextMenu.isOpen}
         position={contextMenu.position}
         categories={categories}
+        readOnly={isReadOnly}
         onClose={closeContextMenu}
         onCopyLink={copyLinkToClipboard}
         onEditLink={editLinkFromContextMenu}

@@ -21,6 +21,7 @@ const assetManifest = JSON.parse(manifestJSON);
 interface KVNamespaceInterface {
     get(key: string, type?: 'text' | 'json' | 'arrayBuffer' | 'stream'): Promise<any>;
     put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+    delete(key: string): Promise<void>;
     list(options?: { prefix?: string }): Promise<{ keys: Array<{ name: string; expiration?: number }> }>;
 }
 
@@ -45,6 +46,7 @@ interface YNavSyncData {
     aiConfig?: any;
     siteSettings?: any;
     privateVault?: string;
+    schemaVersion?: number;
     meta: SyncMetadata;
 }
 
@@ -52,8 +54,12 @@ interface YNavSyncData {
 // 常量
 // ============================================
 
-const KV_MAIN_DATA_KEY = 'ynav:data';
-const KV_BACKUP_PREFIX = 'ynav:backup:';
+const SYNC_API_VERSION = 'v1';
+const KV_MAIN_DATA_KEY = `ynav:data:${SYNC_API_VERSION}`;
+const KV_BACKUP_PREFIX = `ynav:backup:${SYNC_API_VERSION}:`;
+// Legacy (pre-versioned) keys for backward compatibility
+const KV_LEGACY_MAIN_DATA_KEY = 'ynav:data';
+const KV_LEGACY_BACKUP_PREFIX = 'ynav:backup:';
 const BACKUP_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 // ============================================
@@ -62,7 +68,7 @@ const BACKUP_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Sync-Password',
 };
 
@@ -76,12 +82,39 @@ function jsonResponse(data: any, status = 200): Response {
     });
 }
 
-function isAuthenticated(request: Request, env: Env): boolean {
+function isWriteAuthenticated(request: Request, env: Env): boolean {
     if (!env.SYNC_PASSWORD || env.SYNC_PASSWORD.trim() === '') {
         return true;
     }
     const authHeader = request.headers.get('X-Sync-Password');
     return authHeader === env.SYNC_PASSWORD;
+}
+
+function getWriteAuthStatus(request: Request, env: Env) {
+    const passwordRequired = !!(env.SYNC_PASSWORD && env.SYNC_PASSWORD.trim() !== '');
+    const canWrite = !passwordRequired || isWriteAuthenticated(request, env);
+    return { passwordRequired, canWrite };
+}
+
+const isBackupKeyValid = (backupKey: string) => (
+    backupKey.startsWith(KV_BACKUP_PREFIX) || backupKey.startsWith(KV_LEGACY_BACKUP_PREFIX)
+);
+
+const getBackupTimestamp = (backupKey: string) => {
+    if (backupKey.startsWith(KV_BACKUP_PREFIX)) return backupKey.replace(KV_BACKUP_PREFIX, '');
+    if (backupKey.startsWith(KV_LEGACY_BACKUP_PREFIX)) return backupKey.replace(KV_LEGACY_BACKUP_PREFIX, '');
+    return backupKey;
+};
+
+const getBackupApiVersion = (backupKey: string) => (
+    backupKey.startsWith(KV_BACKUP_PREFIX) ? SYNC_API_VERSION : 'legacy'
+);
+
+async function loadCurrentData(env: Env): Promise<YNavSyncData | null> {
+    const v1 = await env.YNAV_WORKER_KV.get(KV_MAIN_DATA_KEY, 'json') as YNavSyncData | null;
+    if (v1) return v1;
+    const legacy = await env.YNAV_WORKER_KV.get(KV_LEGACY_MAIN_DATA_KEY, 'json') as YNavSyncData | null;
+    return legacy;
 }
 
 // ============================================
@@ -97,23 +130,29 @@ async function handleApiSync(request: Request, env: Env): Promise<Response> {
         return new Response(null, { headers: corsHeaders });
     }
 
-    // 鉴权检查
-    if (!isAuthenticated(request, env)) {
-        return jsonResponse({
-            success: false,
-            error: 'Unauthorized: 密码错误或未配置'
-        }, 401);
-    }
-
     try {
         if (request.method === 'GET') {
+            if (action === 'whoami') {
+                const auth = getWriteAuthStatus(request, env);
+                return jsonResponse({
+                    success: true,
+                    apiVersion: SYNC_API_VERSION,
+                    ...auth
+                });
+            }
             if (action === 'backups') {
+                if (!isWriteAuthenticated(request, env)) {
+                    return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: 'Unauthorized' }, 401);
+                }
                 return await handleListBackups(env);
             }
-            return await handleGet(env);
+            return await handleGet(request, env);
         }
 
         if (request.method === 'POST') {
+            if (!isWriteAuthenticated(request, env)) {
+                return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: 'Unauthorized' }, 401);
+            }
             if (action === 'backup') {
                 return await handleBackup(request, env);
             }
@@ -123,34 +162,63 @@ async function handleApiSync(request: Request, env: Env): Promise<Response> {
             return await handlePost(request, env);
         }
 
-        return jsonResponse({ success: false, error: 'Method not allowed' }, 405);
+        if (request.method === 'DELETE') {
+            if (!isWriteAuthenticated(request, env)) {
+                return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: 'Unauthorized' }, 401);
+            }
+            if (action === 'backup') {
+                return await handleDeleteBackup(request, env);
+            }
+            return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: 'Method not allowed' }, 405);
+        }
+
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: 'Method not allowed' }, 405);
     } catch (error: any) {
-        return jsonResponse({ success: false, error: error.message || '服务器错误' }, 500);
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: error.message || '服务器错误' }, 500);
     }
 }
 
-async function handleGet(env: Env): Promise<Response> {
-    const data = await env.YNAV_WORKER_KV.get(KV_MAIN_DATA_KEY, 'json');
+async function handleGet(request: Request, env: Env): Promise<Response> {
+    const data = await loadCurrentData(env);
     if (!data) {
-        return jsonResponse({ success: true, data: null, message: '云端暂无数据' });
+        return jsonResponse({ success: true, apiVersion: SYNC_API_VERSION, data: null, message: '云端暂无数据' });
     }
-    return jsonResponse({ success: true, data });
+    const auth = getWriteAuthStatus(request, env);
+    const siteMode = (data as any)?.siteSettings?.siteMode;
+    const isWebmaster = siteMode === 'webmaster';
+    if (!auth.canWrite && !isWebmaster) {
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: 'Unauthorized' }, 401);
+    }
+
+    const publicData: YNavSyncData = {
+        links: data.links,
+        categories: data.categories,
+        searchConfig: data.searchConfig,
+        siteSettings: data.siteSettings,
+        schemaVersion: data.schemaVersion,
+        privateVault: undefined,
+        aiConfig: undefined,
+        meta: data.meta
+    };
+
+    return jsonResponse({ success: true, apiVersion: SYNC_API_VERSION, data: auth.canWrite ? data : publicData });
 }
 
 async function handlePost(request: Request, env: Env): Promise<Response> {
     const body = await request.json() as { data: YNavSyncData; expectedVersion?: number };
 
     if (!body.data) {
-        return jsonResponse({ success: false, error: '缺少 data 字段' }, 400);
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: '缺少 data 字段' }, 400);
     }
 
-    const existingData = await env.YNAV_WORKER_KV.get(KV_MAIN_DATA_KEY, 'json') as YNavSyncData | null;
+    const existingData = await loadCurrentData(env);
 
     // 版本冲突检测
     if (existingData && body.expectedVersion !== undefined) {
         if (existingData.meta.version !== body.expectedVersion) {
             return jsonResponse({
                 success: false,
+                apiVersion: SYNC_API_VERSION,
                 conflict: true,
                 data: existingData,
                 error: '版本冲突，云端数据已被其他设备更新'
@@ -169,13 +237,13 @@ async function handlePost(request: Request, env: Env): Promise<Response> {
     };
 
     await env.YNAV_WORKER_KV.put(KV_MAIN_DATA_KEY, JSON.stringify(dataToSave));
-    return jsonResponse({ success: true, data: dataToSave, message: '同步成功' });
+    return jsonResponse({ success: true, apiVersion: SYNC_API_VERSION, data: dataToSave, message: '同步成功' });
 }
 
 async function handleBackup(request: Request, env: Env): Promise<Response> {
     const body = await request.json() as { data: YNavSyncData };
     if (!body.data) {
-        return jsonResponse({ success: false, error: '缺少 data 字段' }, 400);
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: '缺少 data 字段' }, 400);
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('.')[0];
@@ -185,23 +253,23 @@ async function handleBackup(request: Request, env: Env): Promise<Response> {
         expirationTtl: BACKUP_TTL_SECONDS
     });
 
-    return jsonResponse({ success: true, backupKey, message: `备份成功: ${backupKey}` });
+    return jsonResponse({ success: true, apiVersion: SYNC_API_VERSION, backupKey, message: `备份成功: ${backupKey}` });
 }
 
 async function handleRestore(request: Request, env: Env): Promise<Response> {
     const body = await request.json() as { backupKey?: string; deviceId?: string };
     const backupKey = body.backupKey;
 
-    if (!backupKey || !backupKey.startsWith(KV_BACKUP_PREFIX)) {
-        return jsonResponse({ success: false, error: '无效的备份 key' }, 400);
+    if (!backupKey || !isBackupKeyValid(backupKey)) {
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: '无效的备份 key' }, 400);
     }
 
     const backupData = await env.YNAV_WORKER_KV.get(backupKey, 'json') as YNavSyncData | null;
     if (!backupData) {
-        return jsonResponse({ success: false, error: '备份不存在或已过期' }, 404);
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: '备份不存在或已过期' }, 404);
     }
 
-    const existingData = await env.YNAV_WORKER_KV.get(KV_MAIN_DATA_KEY, 'json') as YNavSyncData | null;
+    const existingData = await loadCurrentData(env);
     const now = Date.now();
     let rollbackKey: string | null = null;
 
@@ -227,33 +295,56 @@ async function handleRestore(request: Request, env: Env): Promise<Response> {
     };
 
     await env.YNAV_WORKER_KV.put(KV_MAIN_DATA_KEY, JSON.stringify(restoredData));
-    return jsonResponse({ success: true, data: restoredData, rollbackKey });
+    return jsonResponse({ success: true, apiVersion: SYNC_API_VERSION, data: restoredData, rollbackKey });
 }
 
 async function handleListBackups(env: Env): Promise<Response> {
-    const list = await env.YNAV_WORKER_KV.list({ prefix: KV_BACKUP_PREFIX });
+    const [v1List, legacyList] = await Promise.all([
+        env.YNAV_WORKER_KV.list({ prefix: KV_BACKUP_PREFIX }),
+        env.YNAV_WORKER_KV.list({ prefix: KV_LEGACY_BACKUP_PREFIX })
+    ]);
+    const legacyOnlyKeys = legacyList.keys.filter(k => !k.name.startsWith(KV_BACKUP_PREFIX));
+    const keys = [...v1List.keys, ...legacyOnlyKeys];
 
-    const backups = await Promise.all(list.keys.map(async (key) => {
+    const backups = await Promise.all(keys.map(async (key) => {
         let meta: SyncMetadata | null = null;
+        let schemaVersion: number | undefined;
         try {
             const data = await env.YNAV_WORKER_KV.get(key.name, 'json') as YNavSyncData | null;
             meta = data?.meta || null;
+            schemaVersion = data?.schemaVersion;
         } catch {
             meta = null;
         }
         return {
             key: key.name,
-            timestamp: key.name.replace(KV_BACKUP_PREFIX, ''),
+            apiVersion: getBackupApiVersion(key.name),
+            timestamp: getBackupTimestamp(key.name),
             expiration: key.expiration,
             deviceId: meta?.deviceId,
             updatedAt: meta?.updatedAt,
             version: meta?.version,
             browser: meta?.browser,
-            os: meta?.os
+            os: meta?.os,
+            schemaVersion
         };
     }));
 
-    return jsonResponse({ success: true, backups });
+    return jsonResponse({ success: true, apiVersion: SYNC_API_VERSION, backups });
+}
+
+async function handleDeleteBackup(request: Request, env: Env): Promise<Response> {
+    const body = await request.json() as { backupKey?: string };
+    const backupKey = body.backupKey;
+    if (!backupKey || !isBackupKeyValid(backupKey)) {
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: '无效的备份 key' }, 400);
+    }
+    const existing = await env.YNAV_WORKER_KV.get(backupKey, 'json');
+    if (!existing) {
+        return jsonResponse({ success: false, apiVersion: SYNC_API_VERSION, error: '备份不存在或已过期' }, 404);
+    }
+    await env.YNAV_WORKER_KV.delete(backupKey);
+    return jsonResponse({ success: true, apiVersion: SYNC_API_VERSION, message: '备份已删除' });
 }
 
 // ============================================
@@ -302,7 +393,7 @@ export default {
         const url = new URL(request.url);
 
         // API 路由
-        if (url.pathname.startsWith('/api/sync')) {
+        if (url.pathname.startsWith('/api/sync') || url.pathname.startsWith('/api/v1/sync')) {
             return handleApiSync(request, env);
         }
 

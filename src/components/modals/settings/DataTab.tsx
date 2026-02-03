@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Database, Upload, Cloud, Lock, Eye, EyeOff, RefreshCw, Clock, Cpu, CloudUpload, CloudDownload, Trash2 } from 'lucide-react';
-import { SyncStatus } from '../../../types';
+import { SiteSettings, SyncStatus } from '../../../types';
 import { SYNC_API_ENDPOINT, SYNC_META_KEY, SYNC_PASSWORD_KEY, SYNC_API_VERSION, SYNC_DATA_SCHEMA_VERSION } from '../../../utils/constants';
 
 interface DataTabProps {
@@ -18,6 +18,10 @@ interface DataTabProps {
     onTogglePrivacyAutoUnlock: (enabled: boolean) => void;
     syncStatus?: SyncStatus;
     lastSyncTime?: number | null;
+    siteSettings: SiteSettings;
+    onSiteSettingChange: (key: keyof SiteSettings, value: any) => void;
+    webmasterUnlocked?: boolean;
+    onWebmasterUnlockedChange?: (unlocked: boolean) => void;
 }
 
 interface BackupItem {
@@ -47,7 +51,11 @@ const DataTab: React.FC<DataTabProps> = ({
     privacyAutoUnlockEnabled,
     onTogglePrivacyAutoUnlock,
     syncStatus = 'idle',
-    lastSyncTime = null
+    lastSyncTime = null,
+    siteSettings,
+    onSiteSettingChange,
+    webmasterUnlocked = false,
+    onWebmasterUnlockedChange
 }) => {
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -62,6 +70,9 @@ const DataTab: React.FC<DataTabProps> = ({
     const [remoteInfo, setRemoteInfo] = useState<{ apiVersion?: string; schemaVersion?: number; meta?: any } | null>(null);
     const [remoteError, setRemoteError] = useState<string | null>(null);
     const [isLoadingRemote, setIsLoadingRemote] = useState(false);
+    const [authInfo, setAuthInfo] = useState<{ passwordRequired: boolean; canWrite: boolean } | null>(null);
+    const [authError, setAuthError] = useState<string | null>(null);
+    const [isCheckingAuth, setIsCheckingAuth] = useState(false);
     const [privacyTarget, setPrivacyTarget] = useState<'sync' | 'separate' | null>(null);
     const [privacyOldPassword, setPrivacyOldPassword] = useState('');
     const [privacyNewPassword, setPrivacyNewPassword] = useState('');
@@ -182,6 +193,29 @@ const DataTab: React.FC<DataTabProps> = ({
         }
     }, [getAuthHeaders]);
 
+    const fetchAuthInfo = useCallback(async (): Promise<{ passwordRequired: boolean; canWrite: boolean } | null> => {
+        setIsCheckingAuth(true);
+        setAuthError(null);
+        try {
+            const response = await fetch(`${SYNC_API_ENDPOINT}?action=whoami`, { headers: getAuthHeaders() });
+            const result = await response.json();
+            if (!result.success) {
+                setAuthInfo(null);
+                setAuthError(result.error || '鉴权检查失败');
+                return null;
+            }
+            const next = { passwordRequired: !!result.passwordRequired, canWrite: !!result.canWrite };
+            setAuthInfo(next);
+            return next;
+        } catch (error: any) {
+            setAuthInfo(null);
+            setAuthError(error.message || '网络错误');
+            return null;
+        } finally {
+            setIsCheckingAuth(false);
+        }
+    }, [getAuthHeaders]);
+
     const fetchBackups = useCallback(async () => {
         setIsLoadingBackups(true);
         setBackupError(null);
@@ -281,13 +315,27 @@ const DataTab: React.FC<DataTabProps> = ({
         }
     }, [privacyTarget, privacyOldPassword, privacyNewPassword, onMigratePrivacyMode, resetPrivacyMigration]);
 
+    const isWebmaster = siteSettings?.siteMode === 'webmaster';
+    const canWrite = authInfo?.canWrite ?? false;
+    const passwordRequired = authInfo?.passwordRequired ?? false;
+    const isAdmin = canWrite && (!isWebmaster || webmasterUnlocked);
+
     useEffect(() => {
+        if (!canWrite) {
+            setBackups([]);
+            setBackupError(null);
+            return;
+        }
         fetchBackups();
-    }, [fetchBackups]);
+    }, [fetchBackups, canWrite]);
 
     useEffect(() => {
         fetchRemoteInfo();
     }, [fetchRemoteInfo]);
+
+    useEffect(() => {
+        fetchAuthInfo();
+    }, [fetchAuthInfo, password]);
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -355,6 +403,66 @@ const DataTab: React.FC<DataTabProps> = ({
                         </button>
                     </div>
 
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                            站点模式：{isWebmaster ? '站长模式(只读)' : '个人模式'}
+                        </span>
+                        <span className="px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                            写权限：{canWrite ? '有' : '无'}{passwordRequired ? '' : '（未设置密码）'}
+                        </span>
+                        {authError && (
+                            <span className="text-red-600 dark:text-red-400 break-all">{authError}</span>
+                        )}
+                    </div>
+
+                    {isWebmaster && !isAdmin && (
+                        <div className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+                            当前为站长模式：访客只读。输入站长密码并验证后可编辑/同步。
+                        </div>
+                    )}
+
+                    {isWebmaster && passwordRequired === false && (
+                        <div className="mt-2 text-xs text-red-600 dark:text-red-400">
+                            警告：未配置 Cloudflare 环境变量 <code>SYNC_PASSWORD</code> 时，站长模式无法从服务端阻止写入（建议立即配置）。
+                        </div>
+                    )}
+
+                    <div className="mt-3 flex items-center gap-2">
+                        {isWebmaster && !webmasterUnlocked && (
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    const result = await fetchAuthInfo();
+                                    if (result?.canWrite && onWebmasterUnlockedChange) onWebmasterUnlockedChange(true);
+                                }}
+                                disabled={isCheckingAuth}
+                                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-accent text-white hover:bg-accent/90 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                                {isCheckingAuth ? '验证中...' : '验证站长密码'}
+                            </button>
+                        )}
+                        {isWebmaster && webmasterUnlocked && (
+                            <button
+                                type="button"
+                                onClick={() => onWebmasterUnlockedChange?.(false)}
+                                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600"
+                            >
+                                退出站长权限
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={fetchAuthInfo}
+                            disabled={isCheckingAuth}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-accent/40 hover:text-accent disabled:opacity-60"
+                        >
+                            刷新鉴权
+                        </button>
+                        <div className="ml-auto text-[10px] text-slate-400">
+                            API：{SYNC_API_VERSION} / Schema：v{SYNC_DATA_SCHEMA_VERSION}
+                        </div>
+                    </div>
+
                     <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                         <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 p-3">
                             <div className="flex items-center justify-between">
@@ -364,14 +472,14 @@ const DataTab: React.FC<DataTabProps> = ({
                                     return <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${badge.cls}`}>{badge.text}</span>;
                                 })()}
                             </div>
-                            <div className="mt-2 space-y-1 text-slate-700 dark:text-slate-200">
-                                <div>最后同步：{formatSyncTime(lastSyncTime)}</div>
-                                <div>Revision：{typeof localMeta?.version === 'number' ? localMeta.version : '-'}</div>
-                                <div>更新时间：{formatSyncTime(localMeta?.updatedAt)}</div>
-                                <div>设备：{formatDeviceLabel(localMeta?.deviceId, localMeta?.browser, localMeta?.os)}</div>
-                                <div>API：{SYNC_API_VERSION} / Schema：v{SYNC_DATA_SCHEMA_VERSION}</div>
+                                <div className="mt-2 space-y-1 text-slate-700 dark:text-slate-200">
+                                    <div>最后同步：{formatSyncTime(lastSyncTime)}</div>
+                                    <div>Revision：{typeof localMeta?.version === 'number' ? localMeta.version : '-'}</div>
+                                    <div>更新时间：{formatSyncTime(localMeta?.updatedAt)}</div>
+                                    <div>设备：{formatDeviceLabel(localMeta?.deviceId, localMeta?.browser, localMeta?.os)}</div>
+                                    <div>Schema：v{SYNC_DATA_SCHEMA_VERSION}</div>
+                                </div>
                             </div>
-                        </div>
 
                         <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 p-3">
                             <div className="flex items-center justify-between">
@@ -392,6 +500,30 @@ const DataTab: React.FC<DataTabProps> = ({
                                     </>
                                 )}
                             </div>
+                        </div>
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700/60">
+                        <div className="flex items-center justify-between">
+                            <div className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                                站长模式（强只读）
+                            </div>
+                            <button
+                                type="button"
+                                disabled={!isAdmin}
+                                onClick={() => onSiteSettingChange('siteMode', isWebmaster ? 'personal' : 'webmaster')}
+                                className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors ${isWebmaster ? 'bg-accent' : 'bg-slate-200 dark:bg-slate-700'} ${!isAdmin ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                aria-pressed={isWebmaster}
+                                title={!isAdmin ? '需验证站长密码后才可切换' : undefined}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${isWebmaster ? 'translate-x-5' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                            开启后：访客只能浏览/搜索/打开链接，无法新增、编辑、删除、排序或同步写入。
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                            注意：切换后需点击底部“保存设置”并同步到云端后，其他访客才会生效。
                         </div>
                     </div>
                 </div>
@@ -551,7 +683,7 @@ const DataTab: React.FC<DataTabProps> = ({
                             <button
                                 type="button"
                                 onClick={handleCreateBackup}
-                                disabled={isCreatingBackup}
+                                disabled={isCreatingBackup || !isAdmin}
                                 className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-emerald-200 disabled:opacity-60"
                             >
                                 <CloudUpload size={12} className={isCreatingBackup ? 'animate-spin' : ''} />
@@ -560,7 +692,7 @@ const DataTab: React.FC<DataTabProps> = ({
                             <button
                                 type="button"
                                 onClick={fetchBackups}
-                                disabled={isLoadingBackups}
+                                disabled={isLoadingBackups || !canWrite}
                                 className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white disabled:opacity-60"
                             >
                                 <RefreshCw size={12} className={isLoadingBackups ? 'animate-spin' : ''} />
@@ -568,6 +700,12 @@ const DataTab: React.FC<DataTabProps> = ({
                             </button>
                         </div>
                     </div>
+
+                    {!canWrite && (
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                            未验证写权限，无法查看/管理云端备份。
+                        </div>
+                    )}
 
                     {createError && (
                         <div className="mb-2 text-xs text-red-600 dark:text-red-400">{createError}</div>
@@ -614,7 +752,7 @@ const DataTab: React.FC<DataTabProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={() => handleRestoreBackup(backup.key)}
-                                                disabled={!!restoringKey || !!deletingKey}
+                                                disabled={!!restoringKey || !!deletingKey || !isAdmin}
                                                 className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-200 disabled:opacity-60"
                                             >
                                                 <CloudDownload size={12} className={restoringKey === backup.key ? 'animate-spin' : ''} />
@@ -623,7 +761,7 @@ const DataTab: React.FC<DataTabProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={() => handleDeleteBackup(backup.key)}
-                                                disabled={!!restoringKey || !!deletingKey}
+                                                disabled={!!restoringKey || !!deletingKey || !isAdmin}
                                                 className="flex items-center gap-1.5 text-xs text-red-700 dark:text-red-300 hover:text-red-900 dark:hover:text-red-200 disabled:opacity-60"
                                             >
                                                 <Trash2 size={12} className={deletingKey === backup.key ? 'animate-spin' : ''} />
@@ -653,7 +791,9 @@ const DataTab: React.FC<DataTabProps> = ({
                             onOpenImport();
                             onClose();
                         }}
-                        className="flex flex-col items-center justify-center gap-3 p-6 rounded-xl border border-dashed border-slate-300 dark:border-slate-600 hover:border-accent hover:bg-accent/5 dark:hover:bg-accent/10 transition-all group"
+                        disabled={!isAdmin}
+                        title={!isAdmin ? '需验证站长密码后才可导入' : undefined}
+                        className="flex flex-col items-center justify-center gap-3 p-6 rounded-xl border border-dashed border-slate-300 dark:border-slate-600 hover:border-accent hover:bg-accent/5 dark:hover:bg-accent/10 transition-all group disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                         <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 group-hover:text-accent group-hover:bg-white dark:group-hover:bg-slate-700 transition-colors shadow-sm">
                             <Upload size={24} />
