@@ -497,7 +497,10 @@ function App() {
     || (localStorage.getItem(SYNC_PASSWORD_KEY) || '').trim()
     || webmasterUnlocked
   );
-  const canRevealHidden = hasRevealCredential && !!(remoteAuth?.canView || remoteAuth?.canWrite || webmasterUnlocked);
+  const isWebmasterSite = remoteSiteMode === 'webmaster';
+  const canRevealHidden = isWebmasterSite
+    ? !!(remoteAuth?.canView || remoteAuth?.canWrite || webmasterUnlocked)
+    : hasRevealCredential;
   const hiddenCategoryIds = useMemo(() => {
     return new Set(categories.filter(c => c.hidden).map(c => c.id));
   }, [categories]);
